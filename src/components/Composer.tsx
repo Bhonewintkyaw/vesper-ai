@@ -47,7 +47,7 @@ const ACCEPTED_DOC_TYPES = new Set([
   'text/csv',
   'application/json',
 ]);
-const MAX_FILE_BYTES = 4 * 1024 * 1024;
+const MAX_FILE_BYTES = 3 * 1024 * 1024;
 const MAX_ATTACHMENTS = 5;
 const PROMPT_HISTORY_KEY = 'vesper_prompt_history_v1';
 const MAX_PROMPT_HISTORY = 100;
@@ -274,7 +274,7 @@ export function Composer({
         continue;
       }
       if (file.size > MAX_FILE_BYTES) {
-        setAttachError(`${file.name} exceeds the 4 MB limit.`);
+        setAttachError(`${file.name} exceeds the 3 MB limit.`);
         continue;
       }
       try {

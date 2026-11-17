@@ -234,7 +234,7 @@ export function mapGeminiError(err: unknown): { status: number; message: string 
     return {
       status: 429,
       message:
-        'Rate limit reached for your current free-tier key. Wait a few seconds and try again.',
+        'Free-tier rate limit reached (large files or rapid messages can hit per-minute quotas). Wait ~20 seconds and try again.',
     };
   }
   if (status === 404 || rawMessage.includes('NOT_FOUND')) {
@@ -249,7 +249,11 @@ export function mapGeminiError(err: unknown): { status: number; message: string 
   };
 }
 
-async function withRetry<T>(fn: () => Promise<T>, maxRetries = 2): Promise<T> {
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries = 2,
+  baseDelayMs = 800
+): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -261,7 +265,7 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 2): Promise<T> {
       if (!isTransient || attempt === maxRetries) {
         throw err;
       }
-      const delayMs = 350 * Math.pow(2, attempt);
+      const delayMs = baseDelayMs * Math.pow(2, attempt);
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
@@ -269,24 +273,46 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 2): Promise<T> {
 }
 
 function buildContents(messages: IncomingMessage[]): Content[] {
-  const contents: Content[] = [];
-  for (const msg of messages) {
-    const parts: Part[] = [];
-    if (Array.isArray(msg.attachments)) {
-      for (const att of msg.attachments.slice(0, 5)) {
-        if (att && typeof att.data === 'string' && typeof att.mimeType === 'string' && att.data.length > 0) {
-          parts.push({
-            inlineData: {
-              mimeType: att.mimeType,
-              data: att.data,
-            },
-          });
-        }
+  const seenKeys = new Set<string>();
+  const keptAttachmentsByIndex: IncomingAttachment[][] = messages.map(() => []);
+  const omittedNamesByIndex: string[][] = messages.map(() => []);
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const atts = Array.isArray(messages[i]?.attachments) ? messages[i].attachments!.slice(0, 5) : [];
+    for (const att of atts) {
+      if (!att || typeof att.data !== 'string' || typeof att.mimeType !== 'string' || att.data.length === 0) {
+        continue;
       }
+      const key = `${att.mimeType}:${att.data.length}:${att.data.slice(0, 64)}`;
+      if (seenKeys.has(key)) {
+        if (att.name) omittedNamesByIndex[i].push(att.name);
+        continue;
+      }
+      seenKeys.add(key);
+      keptAttachmentsByIndex[i].push(att);
     }
-    const trimmedText = typeof msg.text === 'string' ? msg.text : '';
-    if (trimmedText.length > 0 || parts.length === 0) {
-      parts.push({ text: trimmedText || ' ' });
+  }
+
+  const contents: Content[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    const parts: Part[] = [];
+    for (const att of keptAttachmentsByIndex[i]) {
+      parts.push({
+        inlineData: {
+          mimeType: att.mimeType,
+          data: att.data,
+        },
+      });
+    }
+    const baseText = typeof msg.text === 'string' ? msg.text : '';
+    const omittedNote =
+      omittedNamesByIndex[i].length > 0
+        ? `\n[Attached file included later in conversation: ${omittedNamesByIndex[i].join(', ')}]`
+        : '';
+    const combinedText = `${baseText}${omittedNote}`.trim();
+    if (combinedText.length > 0 || parts.length === 0) {
+      parts.push({ text: combinedText || ' ' });
     }
     contents.push({
       role: msg.role === 'model' ? 'model' : 'user',
@@ -403,7 +429,6 @@ export async function handleChatStream(req: ApiRequest, res: ApiResponse) {
   const useUrlContext = Boolean(body.useUrlContext) || containsWebUrl(latestText);
   const model: ChatModelId =
     useSearch || useUrlContext ? 'gemini-4-hydrogen' : resolveModel(body.model);
-  const thinkingLevel = resolveThinkingLevel(model, body.thinkingLevel);
   const systemInstruction = buildSystemInstruction(body);
 
   const tools: Array<Record<string, unknown>> = [];
@@ -432,17 +457,46 @@ export async function handleChatStream(req: ApiRequest, res: ApiResponse) {
     const ai = getGeminiClient();
     const contents = buildContents(rawMessages);
 
-    const stream = await withRetry(() =>
+    const openStream = (targetModel: ChatModelId, includeTools: boolean) =>
       ai.models.generateContentStream({
-        model,
+        model: targetModel,
         contents,
         config: {
           systemInstruction,
-          thinkingConfig: { thinkingLevel },
-          ...(tools.length > 0 ? { tools } : {}),
+          thinkingConfig: { thinkingLevel: resolveThinkingLevel(targetModel, body.thinkingLevel) },
+          ...(includeTools && tools.length > 0 ? { tools } : {}),
         },
-      })
-    );
+      });
+
+    let activeModel: ChatModelId = model;
+    let stream;
+    try {
+      stream = await withRetry(
+        () => openStream(activeModel, true),
+        activeModel === 'gemini-4-hydrogen' ? 1 : 2,
+        activeModel === 'gemini-4-hydrogen' ? 1200 : 1500
+      );
+    } catch (primaryErr) {
+      const primaryMapped = mapGeminiError(primaryErr);
+      if (
+        activeModel === 'gemini-4-hydrogen' &&
+        (primaryMapped.status === 429 || primaryMapped.status === 503 || primaryMapped.status === 404)
+      ) {
+        activeModel = 'gemini-3.1-flash-lite';
+        try {
+          stream = await withRetry(() => openStream(activeModel, true), 1, 1200);
+        } catch (fallbackWithToolsErr) {
+          const fallbackMapped = mapGeminiError(fallbackWithToolsErr);
+          if (tools.length > 0 && (fallbackMapped.status === 400 || fallbackMapped.status === 429)) {
+            stream = await withRetry(() => openStream(activeModel, false), 1, 1200);
+          } else {
+            throw fallbackWithToolsErr;
+          }
+        }
+      } else {
+        throw primaryErr;
+      }
+    }
 
     const sourceMap = new Map<string, GroundingSource>();
     let totalTokens: number | undefined;
@@ -489,7 +543,7 @@ export async function handleChatStream(req: ApiRequest, res: ApiResponse) {
         type: 'done',
         sources: Array.from(sourceMap.values()).slice(0, 15),
         totalTokens,
-        model,
+        model: activeModel,
       });
     }
   } catch (err) {

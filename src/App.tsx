@@ -672,17 +672,28 @@ export default function App() {
     let wasAborted = false;
 
     try {
-      const payloadMessages = conversationMessages.map((m) => ({
+      const seenKeys = new Set<string>();
+      const keptByMsgIndex: Array<Array<{ mimeType: string; data: string; name: string }>> =
+        conversationMessages.map(() => []);
+      for (let i = conversationMessages.length - 1; i >= 0; i--) {
+        const atts = conversationMessages[i].localAttachments || [];
+        for (const a of atts) {
+          const key = `${a.mimeType}:${a.data.length}:${a.data.slice(0, 64)}`;
+          if (seenKeys.has(key)) continue;
+          seenKeys.add(key);
+          keptByMsgIndex[i].push({
+            mimeType: a.mimeType,
+            data: a.data,
+            name: a.name,
+          });
+        }
+      }
+
+      const payloadMessages = conversationMessages.map((m, idx) => ({
         role: m.role,
         text: m.text,
-        ...(m.localAttachments && m.localAttachments.length > 0
-          ? {
-              attachments: m.localAttachments.map((a) => ({
-                mimeType: a.mimeType,
-                data: a.data,
-                name: a.name,
-              })),
-            }
+        ...(keptByMsgIndex[idx].length > 0
+          ? { attachments: keptByMsgIndex[idx] }
           : {}),
       }));
 
