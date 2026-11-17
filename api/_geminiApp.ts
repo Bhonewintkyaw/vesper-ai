@@ -1,0 +1,719 @@
+import 'dotenv/config';
+import express from 'express';
+import type { Express, Request, Response } from 'express';
+import {
+  GoogleGenAI,
+  ThinkingLevel,
+} from '@google/genai';
+import type { Content, Part } from '@google/genai';
+
+export type ChatModelId = 'gemini-4-hydrogen' | 'gemini-3.1-flash-lite';
+export type ThinkingDepth = 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH' | 'XHIGH';
+export type AdaptiveMode = 'expert' | 'learning';
+
+export interface IncomingAttachment {
+  mimeType: string;
+  data: string;
+  name?: string;
+}
+
+export interface IncomingMessage {
+  role: 'user' | 'model';
+  text: string;
+  attachments?: IncomingAttachment[];
+}
+
+export interface ActiveModulePayload {
+  name: string;
+  command: string;
+  instruction: string;
+}
+
+export interface ChatStreamBody {
+  messages?: IncomingMessage[];
+  model?: string;
+  thinkingLevel?: string;
+  systemInstruction?: string;
+  adaptiveMode?: AdaptiveMode;
+  activeModules?: ActiveModulePayload[];
+  useSearch?: boolean;
+  useUrlContext?: boolean;
+  userName?: string;
+}
+
+interface TitleRequestBody {
+  userPrompt?: string;
+  modelReply?: string;
+}
+
+interface TranscribeRequestBody {
+  audioData?: string;
+  mimeType?: string;
+}
+
+interface TtsRequestBody {
+  text?: string;
+  voice?: string;
+}
+
+interface GroundingSource {
+  uri: string;
+  title: string;
+}
+
+const VALID_MODELS: ReadonlySet<ChatModelId> = new Set([
+  'gemini-4-hydrogen',
+  'gemini-3.1-flash-lite',
+]);
+
+export const VALID_VOICES = new Set(['Zephyr', 'Kore', 'Puck', 'Charon', 'Fenrir']);
+
+const VESPER_BASE_DIRECTIVES = `You are Vesper AI, a highly adaptable and modular AI companion designed for cybersecurity, IT development, and technical problem-solving.
+
+Core Directives:
+- Primary Identity: You are Vesper AI. You are witty, friendly, and approachable, while maintaining a high level of professional expertise.
+- Cybersecurity Specialization: You act as an ethical hacking assistant, providing threat intelligence, secure coding analysis, and CLI command guidance while strictly adhering to ethical and legal security standards.
+- Modular Extensibility: You are designed to accommodate new functions as they are developed. When the user introduces new modules or slash-command functions, integrate them seamlessly into your workflow.
+- Safety & Ethics: Your highest priority is system integrity and ethical responsibility. You must refuse any requests that violate security ethics or promote malicious or unauthorized activities.
+- Communication: Be concise and efficient when dealing with code or commands, and remain conversational and engaging during brainstorming sessions. Never use em-dashes (—) in your replies; use periods, commas, or standard hyphens instead.
+- Continuous Evolution: You are open to receiving new module definitions and workflow updates from the user to expand your capabilities.`;
+
+function sanitizeUserName(raw?: string | null): string {
+  if (typeof raw !== 'string') return '';
+  return raw.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
+}
+
+function buildSystemInstruction(body: ChatStreamBody): string {
+  const mode: AdaptiveMode = body.adaptiveMode === 'expert' ? 'expert' : 'learning';
+  const safeUserName = sanitizeUserName(body.userName);
+  const modeDirective =
+    mode === 'expert'
+      ? 'Adaptive Context (Expert Mode): Prioritize deep technical detail, precision, security edge cases, and concise production-ready code or CLI commands without unnecessary introductory fluff.'
+      : 'Adaptive Context (Learning Mode): Explain concepts clearly. Connect practical commands and code to underlying networking, OS, or security fundamentals so the user understands both the how and the why.';
+
+  const userDirective = safeUserName
+    ? `\nSigned-in User: The user's name is ${safeUserName}. Address them naturally when appropriate.`
+    : '';
+
+  const modules = Array.isArray(body.activeModules)
+    ? body.activeModules.slice(0, 20)
+    : [];
+  const modulesSection =
+    modules.length > 0
+      ? `\nActive Modular Functions (if the user invokes a slash command or asks for one of these workflows, follow its specific directive):\n${modules
+          .map(
+            (m) =>
+              `- ${String(m.command || '').slice(0, 32)} (${String(m.name || '').slice(0, 60)}): ${String(m.instruction || '').slice(0, 600)}`
+          )
+          .join('\n')}`
+      : '';
+
+  const customExtra =
+    typeof body.systemInstruction === 'string' && body.systemInstruction.trim().length > 0
+      ? `\nAdditional User Context:\n${body.systemInstruction.trim().slice(0, 1500)}`
+      : '';
+
+  return `${VESPER_BASE_DIRECTIVES}\n\n${modeDirective}${userDirective}${modulesSection}${customExtra}`.slice(
+    0,
+    4000
+  );
+}
+
+export function buildVoiceSystemInstruction(mode: AdaptiveMode, userName?: string): string {
+  const safeUserName = sanitizeUserName(userName);
+  const modeNote =
+    mode === 'expert'
+      ? 'Use Expert Mode: concise, technically sharp spoken explanations.'
+      : 'Use Learning Mode: friendly, clear conceptual explanations.';
+  const targetUser = safeUserName || 'the user';
+  return `You are Vesper AI speaking in real time with ${targetUser}. Be warm, witty, natural, and concise for voice conversation. Keep answers direct and conversational unless asked for step-by-step detail. Maintain strict ethical cybersecurity standards. ${modeNote}`;
+}
+
+function shouldAutoSearch(text: string): boolean {
+  const normalized = text.toLowerCase();
+  if (!normalized.trim()) return false;
+  if (normalized.startsWith('/search')) return true;
+  const liveSignals = [
+    /\b(latest|recent|current|currently|today|tonight|yesterday|this week|this month|this year|2025|2026|now)\b/,
+    /\b(news|weather|forecast|stock|price|score|standings|release notes|changelog|cve-\d{4}|zero-day|advisory|breach|outage)\b/,
+    /\b(who won|who is the current|what happened|search the web|look up|check online)\b/,
+  ];
+  return liveSignals.some((rx) => rx.test(normalized));
+}
+
+function containsWebUrl(text: string): boolean {
+  return /https?:\/\/[^\s]+/i.test(text);
+}
+
+export function getGeminiClient(apiVersion?: string): GoogleGenAI {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw Object.assign(
+      new Error('GEMINI_API_KEY is missing. Please configure it in Settings > Secrets.'),
+      { status: 400 }
+    );
+  }
+  return new GoogleGenAI({
+    apiKey,
+    ...(apiVersion ? { apiVersion } : {}),
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+}
+
+function resolveModel(raw?: string): ChatModelId {
+  if (raw && VALID_MODELS.has(raw as ChatModelId)) {
+    return raw as ChatModelId;
+  }
+  return 'gemini-3.1-flash-lite';
+}
+
+function resolveThinkingLevel(model: ChatModelId, raw?: string): ThinkingLevel {
+  const requested = (raw || '').toUpperCase() as ThinkingDepth;
+  if (model === 'gemini-4-hydrogen') {
+    switch (requested) {
+      case 'LOW':
+        return ThinkingLevel.LOW;
+      case 'MEDIUM':
+        return ThinkingLevel.MEDIUM;
+      case 'HIGH':
+        return ThinkingLevel.HIGH;
+      case 'XHIGH':
+        return ThinkingLevel.XHIGH;
+      case 'MINIMAL':
+      default:
+        return ThinkingLevel.LOW;
+    }
+  }
+  switch (requested) {
+    case 'LOW':
+      return ThinkingLevel.LOW;
+    case 'MEDIUM':
+      return ThinkingLevel.MEDIUM;
+    case 'HIGH':
+    case 'XHIGH':
+      return ThinkingLevel.HIGH;
+    case 'MINIMAL':
+    default:
+      return ThinkingLevel.MINIMAL;
+  }
+}
+
+export function mapGeminiError(err: unknown): { status: number; message: string } {
+  const anyErr = err as { status?: number; code?: number; message?: string };
+  const rawMessage = anyErr?.message || 'Unexpected error communicating with Gemini.';
+  const status = Number(anyErr?.status || anyErr?.code || 500);
+
+  if (status === 403 || rawMessage.includes('PERMISSION_DENIED')) {
+    return {
+      status: 403,
+      message: 'API permission denied. Please verify your GEMINI_API_KEY in Settings > Secrets.',
+    };
+  }
+  if (status === 400 || rawMessage.includes('API_KEY_INVALID')) {
+    return {
+      status: 400,
+      message: rawMessage.includes('API_KEY_INVALID')
+        ? 'Invalid Gemini API key. Please check Settings > Secrets.'
+        : rawMessage,
+    };
+  }
+  if (status === 429 || rawMessage.includes('RESOURCE_EXHAUSTED')) {
+    return {
+      status: 429,
+      message:
+        'Rate limit reached for your current free-tier key. Wait a few seconds and try again.',
+    };
+  }
+  if (status === 404 || rawMessage.includes('NOT_FOUND')) {
+    return {
+      status: 404,
+      message: 'Requested Gemini model was not found or is currently unavailable.',
+    };
+  }
+  return {
+    status: Number.isFinite(status) && status >= 400 && status < 600 ? status : 500,
+    message: rawMessage,
+  };
+}
+
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 2): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const mapped = mapGeminiError(err);
+      const isTransient = mapped.status === 503 || mapped.status === 500 || mapped.status === 429;
+      if (!isTransient || attempt === maxRetries) {
+        throw err;
+      }
+      const delayMs = 350 * Math.pow(2, attempt);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastErr;
+}
+
+function buildContents(messages: IncomingMessage[]): Content[] {
+  const contents: Content[] = [];
+  for (const msg of messages) {
+    const parts: Part[] = [];
+    if (Array.isArray(msg.attachments)) {
+      for (const att of msg.attachments.slice(0, 5)) {
+        if (att && typeof att.data === 'string' && typeof att.mimeType === 'string' && att.data.length > 0) {
+          parts.push({
+            inlineData: {
+              mimeType: att.mimeType,
+              data: att.data,
+            },
+          });
+        }
+      }
+    }
+    const trimmedText = typeof msg.text === 'string' ? msg.text : '';
+    if (trimmedText.length > 0 || parts.length === 0) {
+      parts.push({ text: trimmedText || ' ' });
+    }
+    contents.push({
+      role: msg.role === 'model' ? 'model' : 'user',
+      parts,
+    });
+  }
+  return contents;
+}
+
+function sendJson(res: Response, statusCode: number, payload: unknown) {
+  const anyRes = res as Response & {
+    status?: (code: number) => Response;
+    json?: (body: unknown) => Response;
+  };
+  if (typeof anyRes.status === 'function' && typeof anyRes.json === 'function') {
+    anyRes.status(statusCode).json(payload);
+    return;
+  }
+  res.statusCode = statusCode;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.end(JSON.stringify(payload));
+}
+
+async function getParsedBody<T>(req: Request): Promise<T> {
+  const raw = (req as Request & { body?: unknown }).body;
+  if (raw !== undefined && raw !== null) {
+    if (Buffer.isBuffer(raw)) {
+      const str = raw.toString('utf8').trim();
+      if (!str) return {} as T;
+      try {
+        return JSON.parse(str) as T;
+      } catch {
+        return {} as T;
+      }
+    }
+    if (typeof raw === 'string') {
+      const str = raw.trim();
+      if (!str) return {} as T;
+      try {
+        return JSON.parse(str) as T;
+      } catch {
+        return {} as T;
+      }
+    }
+    if (typeof raw === 'object') {
+      return raw as T;
+    }
+  }
+
+  if (req.readableEnded) {
+    return {} as T;
+  }
+
+  return await new Promise<T>((resolve) => {
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    const maxBytes = 20 * 1024 * 1024;
+    let settled = false;
+
+    const finish = (value: T) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    req.on('data', (chunk: Buffer | string) => {
+      const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+      totalBytes += buf.length;
+      if (totalBytes > maxBytes) {
+        finish({} as T);
+        return;
+      }
+      chunks.push(buf);
+    });
+
+    req.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf8').trim();
+      if (!text) {
+        finish({} as T);
+        return;
+      }
+      try {
+        finish(JSON.parse(text) as T);
+      } catch {
+        finish({} as T);
+      }
+    });
+
+    req.on('error', () => {
+      finish({} as T);
+    });
+  });
+}
+
+export function handleHealth(_req: Request, res: Response) {
+  res.setHeader('Cache-Control', 'no-store');
+  sendJson(res, 200, { ok: true });
+}
+
+export async function handleChatStream(req: Request, res: Response) {
+  if (req.method !== 'POST') {
+    sendJson(res, 405, { error: 'Method not allowed.' });
+    return;
+  }
+
+  const body = await getParsedBody<ChatStreamBody>(req);
+  const rawMessages = Array.isArray(body.messages) ? body.messages : [];
+
+  if (rawMessages.length === 0) {
+    sendJson(res, 400, { error: 'At least one message is required.' });
+    return;
+  }
+
+  const latestMessage = rawMessages[rawMessages.length - 1];
+  const latestText = typeof latestMessage?.text === 'string' ? latestMessage.text : '';
+  const useSearch = Boolean(body.useSearch) || shouldAutoSearch(latestText);
+  const useUrlContext = Boolean(body.useUrlContext) || containsWebUrl(latestText);
+  const model: ChatModelId =
+    useSearch || useUrlContext ? 'gemini-4-hydrogen' : resolveModel(body.model);
+  const thinkingLevel = resolveThinkingLevel(model, body.thinkingLevel);
+  const systemInstruction = buildSystemInstruction(body);
+
+  const tools: Array<Record<string, unknown>> = [];
+  if (useSearch) tools.push({ googleSearch: {} });
+  if (useUrlContext) tools.push({ urlContext: {} });
+
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  let clientClosed = false;
+  res.on('close', () => {
+    if (!res.writableFinished) {
+      clientClosed = true;
+    }
+  });
+
+  const writeEvent = (payload: Record<string, unknown>) => {
+    if (clientClosed || res.writableEnded) return;
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  };
+
+  try {
+    const ai = getGeminiClient();
+    const contents = buildContents(rawMessages);
+
+    const stream = await withRetry(() =>
+      ai.models.generateContentStream({
+        model,
+        contents,
+        config: {
+          systemInstruction,
+          thinkingConfig: { thinkingLevel },
+          ...(tools.length > 0 ? { tools } : {}),
+        },
+      })
+    );
+
+    const sourceMap = new Map<string, GroundingSource>();
+    let totalTokens: number | undefined;
+
+    for await (const chunk of stream) {
+      if (clientClosed) break;
+
+      if (chunk.text) {
+        writeEvent({ type: 'chunk', text: chunk.text });
+      }
+
+      const groundingChunks = chunk.candidates?.[0]?.groundingMetadata?.groundingChunks;
+      if (Array.isArray(groundingChunks)) {
+        for (const gc of groundingChunks) {
+          const web = gc?.web;
+          if (web?.uri) {
+            sourceMap.set(web.uri, {
+              uri: web.uri,
+              title: (web.title || web.uri).slice(0, 300),
+            });
+          }
+        }
+      }
+
+      const urlMeta = chunk.candidates?.[0]?.urlContextMetadata?.urlMetadata;
+      if (Array.isArray(urlMeta)) {
+        for (const item of urlMeta) {
+          if (item?.retrievedUrl) {
+            sourceMap.set(item.retrievedUrl, {
+              uri: item.retrievedUrl,
+              title: item.retrievedUrl.slice(0, 300),
+            });
+          }
+        }
+      }
+
+      if (typeof chunk.usageMetadata?.totalTokenCount === 'number') {
+        totalTokens = chunk.usageMetadata.totalTokenCount;
+      }
+    }
+
+    if (!clientClosed) {
+      writeEvent({
+        type: 'done',
+        sources: Array.from(sourceMap.values()).slice(0, 15),
+        totalTokens,
+        model,
+      });
+    }
+  } catch (err) {
+    const mapped = mapGeminiError(err);
+    writeEvent({
+      type: 'error',
+      error: mapped.message,
+      code: mapped.status,
+    });
+  } finally {
+    if (!res.writableEnded) {
+      res.end();
+    }
+  }
+}
+
+export async function handleChatTitle(req: Request, res: Response) {
+  if (req.method !== 'POST') {
+    sendJson(res, 405, { error: 'Method not allowed.' });
+    return;
+  }
+
+  const body = await getParsedBody<TitleRequestBody>(req);
+  const userPrompt = typeof body.userPrompt === 'string' ? body.userPrompt.trim().slice(0, 1000) : '';
+  const modelReply = typeof body.modelReply === 'string' ? body.modelReply.trim().slice(0, 1000) : '';
+
+  if (!userPrompt) {
+    sendJson(res, 400, { error: 'userPrompt is required.' });
+    return;
+  }
+
+  try {
+    const ai = getGeminiClient();
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.1-flash-lite',
+      contents: `Generate a concise 3 to 6 word title (no quotes, no trailing punctuation, title case) summarizing this conversation:\n\nUser: ${userPrompt}\nAssistant: ${modelReply}`,
+      config: {
+        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+      },
+    });
+    const rawTitle = (response.text || '').replace(/["'*`#]/g, '').trim();
+    const title = rawTitle.slice(0, 100) || userPrompt.slice(0, 50);
+    sendJson(res, 200, { title });
+  } catch (err) {
+    const mapped = mapGeminiError(err);
+    sendJson(res, mapped.status, { error: mapped.message });
+  }
+}
+
+export async function handleTranscribe(req: Request, res: Response) {
+  if (req.method !== 'POST') {
+    sendJson(res, 405, { error: 'Method not allowed.' });
+    return;
+  }
+
+  const body = await getParsedBody<TranscribeRequestBody>(req);
+  const audioData = typeof body.audioData === 'string' ? body.audioData.trim() : '';
+  const rawMime = typeof body.mimeType === 'string' ? body.mimeType.split(';')[0].trim() : '';
+  const mimeType = rawMime.startsWith('audio/') ? rawMime : 'audio/webm';
+
+  if (!audioData) {
+    sendJson(res, 400, { error: 'Recorded audio data is required.' });
+    return;
+  }
+
+  const transcribeContents = {
+    parts: [
+      {
+        inlineData: {
+          mimeType,
+          data: audioData,
+        },
+      },
+      {
+        text: 'Transcribe this audio.',
+      },
+    ],
+  };
+
+  try {
+    const aiAlpha = getGeminiClient('v1alpha');
+    const aiDefault = getGeminiClient();
+    let usedModel = 'gemini-3.5-transcribe';
+    let response;
+
+    try {
+      response = await withRetry(() =>
+        aiAlpha.models.generateContent({
+          model: 'gemini-3.5-transcribe',
+          contents: transcribeContents,
+        })
+      );
+    } catch (primaryErr) {
+      const primaryMapped = mapGeminiError(primaryErr);
+      if (primaryMapped.status === 404) {
+        usedModel = 'gemini-3.1-flash-lite';
+        response = await withRetry(() =>
+          aiDefault.models.generateContent({
+            model: 'gemini-3.1-flash-lite',
+            contents: transcribeContents,
+            config: {
+              thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+            },
+          })
+        );
+      } else {
+        throw primaryErr;
+      }
+    }
+
+    let transcript = (response.text || '').trim();
+    if (!transcript && usedModel === 'gemini-3.5-transcribe') {
+      usedModel = 'gemini-3.1-flash-lite';
+      const fallbackRes = await withRetry(() =>
+        aiDefault.models.generateContent({
+          model: 'gemini-3.1-flash-lite',
+          contents: {
+            parts: [
+              transcribeContents.parts[0],
+              {
+                text: 'Transcribe the spoken words in this audio accurately. Return only the spoken words without timestamps or commentary. If there is no speech, output [NO_SPEECH].',
+              },
+            ],
+          },
+          config: {
+            thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+          },
+        })
+      );
+      transcript = (fallbackRes.text || '').trim();
+    }
+
+    if (
+      /^\[?no[_\s-]?speech\]?$/i.test(transcript) ||
+      /^\d{2}:\d{2}(:\d{2})?$/.test(transcript)
+    ) {
+      transcript = '';
+    }
+
+    sendJson(res, 200, {
+      transcript,
+      model: usedModel,
+    });
+  } catch (err) {
+    const mapped = mapGeminiError(err);
+    sendJson(res, mapped.status, { error: mapped.message });
+  }
+}
+
+export async function handleTts(req: Request, res: Response) {
+  if (req.method !== 'POST') {
+    sendJson(res, 405, { error: 'Method not allowed.' });
+    return;
+  }
+
+  const body = await getParsedBody<TtsRequestBody>(req);
+  const rawText = typeof body.text === 'string' ? body.text : '';
+  const cleanText = rawText
+    .replace(/```[\s\S]*?```/g, ' Code snippet omitted. ')
+    .replace(/[#*_`>]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 3500);
+
+  if (!cleanText) {
+    sendJson(res, 400, { error: 'Text is required for speech playback.' });
+    return;
+  }
+
+  const voiceName =
+    typeof body.voice === 'string' && VALID_VOICES.has(body.voice)
+      ? body.voice
+      : 'Zephyr';
+
+  try {
+    const aiAlpha = getGeminiClient('v1alpha');
+    const response = await withRetry(() =>
+      aiAlpha.models.generateContent({
+        model: 'gemini-3.8-flash-lite-tts',
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: cleanText,
+                speechMetadata: {
+                  style: 'Clear, friendly, conversational assistant',
+                },
+              },
+            ],
+          },
+        ],
+        config: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName },
+            },
+          },
+        },
+      })
+    );
+
+    const base64Audio =
+      response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+
+    if (!base64Audio) {
+      sendJson(res, 502, { error: 'No audio was returned by gemini-3.8-flash-lite-tts.' });
+      return;
+    }
+
+    sendJson(res, 200, {
+      audioDataUrl: `data:audio/wav;base64,${base64Audio}`,
+      model: 'gemini-3.8-flash-lite-tts',
+    });
+  } catch (err) {
+    const mapped = mapGeminiError(err);
+    sendJson(res, mapped.status, { error: mapped.message });
+  }
+}
+
+export function createGeminiApiApp(): Express {
+  const app = express();
+  app.use(express.json({ limit: '20mb' }));
+
+  app.get('/api/health', handleHealth);
+  app.post('/api/chat/stream', handleChatStream);
+  app.post('/api/chat/title', handleChatTitle);
+  app.post('/api/transcribe', handleTranscribe);
+  app.post('/api/tts', handleTts);
+
+  return app;
+}
