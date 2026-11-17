@@ -1,0 +1,207 @@
+---
+name: Obsidian Lumina
+colors:
+  surface: '#121318'
+  surface-dim: '#121318'
+  surface-bright: '#38393f'
+  surface-container-lowest: '#0d0e13'
+  surface-container-low: '#1a1b21'
+  surface-container: '#1e1f25'
+  surface-container-high: '#292a2f'
+  surface-container-highest: '#34343a'
+  on-surface: '#e3e1e9'
+  on-surface-variant: '#cbc3d7'
+  inverse-surface: '#e3e1e9'
+  inverse-on-surface: '#2f3036'
+  outline: '#958ea0'
+  outline-variant: '#494454'
+  surface-tint: '#d0bcff'
+  primary: '#d0bcff'
+  on-primary: '#3c0091'
+  primary-container: '#a078ff'
+  on-primary-container: '#340080'
+  inverse-primary: '#6d3bd7'
+  secondary: '#4cd7f6'
+  on-secondary: '#003640'
+  secondary-container: '#03b5d3'
+  on-secondary-container: '#00424e'
+  tertiary: '#ffb869'
+  on-tertiary: '#482900'
+  tertiary-container: '#ca801e'
+  on-tertiary-container: '#3f2300'
+  error: '#ffb4ab'
+  on-error: '#690005'
+  error-container: '#93000a'
+  on-error-container: '#ffdad6'
+  primary-fixed: '#e9ddff'
+  primary-fixed-dim: '#d0bcff'
+  on-primary-fixed: '#23005c'
+  on-primary-fixed-variant: '#5516be'
+  secondary-fixed: '#acedff'
+  secondary-fixed-dim: '#4cd7f6'
+  on-secondary-fixed: '#001f26'
+  on-secondary-fixed-variant: '#004e5c'
+  tertiary-fixed: '#ffdcbb'
+  tertiary-fixed-dim: '#ffb869'
+  on-tertiary-fixed: '#2c1700'
+  on-tertiary-fixed-variant: '#673d00'
+  background: '#121318'
+  on-background: '#e3e1e9'
+  surface-variant: '#34343a'
+typography:
+  display-lg:
+    fontFamily: Plus Jakarta Sans
+    fontSize: 36px
+    fontWeight: '700'
+    lineHeight: 44px
+    letterSpacing: -0.03em
+  display-lg-mobile:
+    fontFamily: Plus Jakarta Sans
+    fontSize: 28px
+    fontWeight: '700'
+    lineHeight: 36px
+    letterSpacing: -0.025em
+  headline-md:
+    fontFamily: Plus Jakarta Sans
+    fontSize: 22px
+    fontWeight: '600'
+    lineHeight: 30px
+    letterSpacing: -0.02em
+  headline-sm:
+    fontFamily: Plus Jakarta Sans
+    fontSize: 18px
+    fontWeight: '600'
+    lineHeight: 26px
+    letterSpacing: -0.015em
+  body-lg:
+    fontFamily: Inter
+    fontSize: 16px
+    fontWeight: '400'
+    lineHeight: 26px
+    letterSpacing: -0.01em
+  body-md:
+    fontFamily: Inter
+    fontSize: 14px
+    fontWeight: '400'
+    lineHeight: 22px
+    letterSpacing: 0em
+  body-sm:
+    fontFamily: Inter
+    fontSize: 12px
+    fontWeight: '400'
+    lineHeight: 18px
+    letterSpacing: 0.01em
+  code-block:
+    fontFamily: JetBrains Mono
+    fontSize: 13px
+    fontWeight: '400'
+    lineHeight: 20px
+    letterSpacing: 0em
+  label-mono:
+    fontFamily: JetBrains Mono
+    fontSize: 11px
+    fontWeight: '500'
+    lineHeight: 16px
+    letterSpacing: 0.06em
+rounded:
+  sm: 0.25rem
+  DEFAULT: 0.5rem
+  md: 0.75rem
+  lg: 1rem
+  xl: 1.5rem
+  full: 9999px
+spacing:
+  gutter: 1rem
+  gutter-sm: 0.75rem
+  margin: 1.25rem
+  margin-sm: 1rem
+  space-xs: 0.25rem
+  space-sm: 0.5rem
+  space-md: 0.75rem
+  space-lg: 1.25rem
+  space-xl: 2rem
+---
+
+## Brand & Style
+
+This design system embodies an ambient, intelligent, and focused cognitive workspace. Designed for builders, researchers, and technical professionals operating in high-concentration environments, the visual character strikes a balance between midnight serenity and cybernetic precision.
+
+The style fuses **Dark Glassmorphism** with **Atmospheric Minimalism**:
+- **Atmospheric Depth:** Deep obsidian backdrops that recede, allowing luminous violet and electric cyan accents to indicate AI activity, state transitions, and computational intelligence.
+- **Glass & Micro-Borders:** Tactile, semi-translucent frosted surfaces anchored by crisp, hairline boundary strokes that retain structural definition in zero-light contexts.
+- **Cognitive Clarity:** Elimination of loud distractions in favor of soft glow dissipation, refined typographic rhythm, and clear contextual focus.
+
+## Colors
+
+The color palette centers on a cold, deep obsidian scale contrasted by intelligent neon illumination:
+
+- **Canvas & Backgrounds:** The base environment is anchored at `#090A0F` (True Obsidian). Surface container elevations scale through `#0F111A` (Base Plate) and `#181B26` (Floating Surface).
+- **Primary Accent (`#8B5CF6` - Neon Violet):** Encapsulates synthesis, AI generation, and top-tier interactive triggers. Used in focused input nodes, primary action pill buttons, and radial ambient halos.
+- **Secondary Accent (`#06B6D4` - Electric Cyan):** Signifies telemetry, active streaming, tool execution, and contextual state indicators.
+- **Borders & Dividers:** Built on `#1E2333` at default rests, elevating to rgba-tinted cyan/violet rings on active focus states.
+- **Text & Contrast Tiers:** Pure White (`#F8FAFC`) for display and key headers, Slate Silver (`#94A3B8`) for body prose and conversation output, and Muted Indigo (`#475569`) for subtle metadata and inactive labels.
+
+## Typography
+
+The typographic hierarchy orchestrates a clean separation between human thought, structured AI responses, and synthetic machine data:
+
+- **Headlines & Titles (Plus Jakarta Sans):** Geometric, modern, and open apertures that remain crisp over dark gradients without feeling harsh.
+- **Continuous Reading (Inter):** Highly neutral and legible body copy optimized for extended reasoning streams, prompt inputs, and complex dialogue trees.
+- **Machine Interface & Code (JetBrains Mono):** Reserved for agent execution traces, token counters, parameter adjustments, syntax-highlighted code blocks, and micro tags.
+- Line heights maintain breathing room (`1.5` to `1.6x` on body copy) to prevent dense text blocks from causing visual fatigue against high-contrast dark backgrounds.
+
+## Layout & Spacing
+
+This design system uses a mobile-first fluid structure anchored to a dynamic 4-column system on mobile hand devices (scaling to 8 columns on foldables and tablets):
+
+- **Horizontal Margins:** Fixed `1.25rem` (20px) outer edge margins ensure comfortable thumb touch anchors and avoid edge clipping on curved bezel screens.
+- **Vertical Chat/Canvas Rhythm:** A persistent vertical flow relying on `space-md` between conversational bubbles, `space-lg` to separate conversational turns, and `space-xl` for sectional transitions.
+- **Safe Area Adaptations:** The bottom docking zone reserves an expanded navigation buffer (`calc(env(safe-area-inset-bottom) + 1rem)`) to float the primary multimodal prompt input seamlessly above OS controls.
+
+## Elevation & Depth
+
+Visual hierarchy does not rely on traditional top-down drop shadows. Depth is communicated strictly through surface transience, glass refraction, and ambient backlights:
+
+- **Level 0 (Canvas Base):** Flat `#090A0F`. Non-interactive foundation layer.
+- **Level 1 (Docked Containers & Conversation Traces):** Solid `#0F111A` with a 1px border of `#1E2333`.
+- **Level 2 (Floating Glass Cards & Prompts):** Translucent background `#181B26` with `80%` opacity, paired with a `backdrop-blur(16px)` and a subtle interior highlight (a top 1px border in `rgba(255, 255, 255, 0.08)` and remaining sides in `#1E2333`).
+- **Level 3 (Modal Overlays & Popovers):** Translucent background `#181B26` with `92%` opacity, `backdrop-blur(24px)`, and an ambient outer glow: `box-shadow: 0 0 32px -8px rgba(139, 92, 246, 0.25)`.
+- **AI Streaming Aura:** Active generating blocks display a perimeter or edge gradient breathing between `#8B5CF6` and `#06B6D4` with a diffuse `8px` blur.
+
+## Shapes
+
+The design system implements a curated `Rounded` geometric profile (`roundedness: 2`):
+
+- **Standard Containers & Cards:** `0.75rem` (12px) to `1rem` (16px), giving surfaces a modern, ergonomic palm feel without looking overly bulbous.
+- **Input Fields & Micro-Pills:** Fully rounded pill curves (`9999px`) are strictly reserved for conversational chips, tool selectors, and send buttons to signify touch points and direct interactive targets.
+- **Code Panes & Structural Panels:** Retain tighter `0.5rem` (8px) corners to preserve maximum viewport utility for structured content.
+
+## Components
+
+### Action & Dispatch Buttons
+- **Primary Pill (Generate / Send):** Background utilizes a horizontal gradient from `#8B5CF6` to `#7C3AED` with pure white text, an inner top border of `rgba(255,255,255,0.25)`, and a subtle resting glow (`box-shadow: 0 0 16px rgba(139, 92, 246, 0.35)`). Active/pressed states compress scale slightly (`scale: 0.97`).
+- **Secondary Ghost:** Translucent background `rgba(24, 27, 38, 0.6)` with a `1px` stroke in `#1E2333`. Text in `#94A3B8`, transitioning to `#F8FAFC` on press.
+
+### Prompt Input Bar
+- Floating docking unit with `backdrop-blur(20px)` over `rgba(15, 17, 26, 0.85)`. 
+- Outlined with `#1E2333`, transforming into an electric gradient ring (`#8B5CF6` fading into `#06B6D4`) when focused.
+- Accompanied by integrated trailing action icons (voice input, attachment, token limits) in muted slate.
+
+### Conversational Chips & Tool Badges
+- Built with `label-mono` typography.
+- Inactive badges sit on `rgba(24, 27, 38, 0.8)` with a `#1E2333` border.
+- Active or running AI tools display a pulsing cyan dot (`#06B6D4`) alongside an electric cyan hairline outline.
+
+### Message Cells & Reasoning Panels
+- **User Message:** Snug right-aligned bubble in `#181B26` with `rounded-2xl` corners (bottom-right tightened), framed with a low-opacity violet border.
+- **Agent Intelligence Stream:** Left-aligned full-width canvas container. Transparent background to blend into the canvas, marked by an authoritative, slim vertical glowing cyan/violet lead stroke during streaming.
+- **Collapsible Reasoning/Thought Node:** Enclosed in `#0F111A` with a dotted left border, featuring a monospaced accordion header displaying execution time (e.g., `thought for 1.4s`).
+
+### Code Snippets & Syntax Blocks
+- Encapsulated within `#0B0D14` containers with rounded 8px corners.
+- Header strip containing filename, language indicator, and a one-touch "Copy" icon button in `label-mono`.
+- Syntax highlighting centered around electric cyan keywords, violet parameters, and muted grey strings.
+
+### Form Inputs & Toggles
+- **Checkboxes & Radios:** Sharp-cornered circles and rounded squares with a `#1E2333` base that fill with `#8B5CF6` and a crisp white tick mark upon selection.
+- **Sliders & Step Values:** Thin `#1E2333` track with a glowing `#8B5CF6` filled segment and an illuminated `#06B6D4` thumb handle.

@@ -1,0 +1,302 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Global Primitives ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidModel(model) {
+      return model is string && model in ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
+    }
+
+    function isValidThinkingLevel(level) {
+      return level is string && level in ['MINIMAL', 'LOW', 'MEDIUM', 'HIGH', 'XHIGH'];
+    }
+
+    function isValidSourcesList(sources) {
+      return sources is list
+        && sources.size() <= 15
+        && (sources.size() == 0 || (
+          sources[0] is map
+          && sources[0].keys().hasAll(['uri', 'title'])
+          && sources[0].keys().hasOnly(['uri', 'title'])
+          && sources[0].uri is string
+          && sources[0].uri.size() <= 1000
+          && sources[0].title is string
+          && sources[0].title.size() <= 300
+        ));
+    }
+
+    function isValidAttachmentNames(names) {
+      return names is list
+        && names.size() <= 5
+        && (names.size() == 0 || (
+          names[0] is string
+          && names[0].size() >= 1
+          && names[0].size() <= 200
+        ));
+    }
+
+    // --- Validation Blueprints ---
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll([
+          'uid', 'displayName', 'email', 'defaultModel',
+          'defaultThinkingLevel', 'defaultSystemInstruction',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'displayName', 'email', 'photoURL', 'defaultModel',
+          'defaultThinkingLevel', 'defaultSystemInstruction',
+          'createdAt', 'updatedAt'
+        ])
+        && data.uid is string
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.uid.size() >= 1
+        && data.uid.size() <= 128
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 100
+        && data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 200
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500))
+        && isValidModel(data.defaultModel)
+        && isValidThinkingLevel(data.defaultThinkingLevel)
+        && data.defaultSystemInstruction is string
+        && data.defaultSystemInstruction.size() <= 4000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChatThread(data, userId) {
+      return data.keys().hasAll([
+          'ownerId', 'title', 'model', 'thinkingLevel',
+          'systemInstruction', 'useSearch', 'pinned',
+          'messageCount', 'lastMessagePreview', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'title', 'model', 'thinkingLevel',
+          'systemInstruction', 'useSearch', 'pinned',
+          'messageCount', 'lastMessagePreview', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && data.ownerId.size() >= 1
+        && data.ownerId.size() <= 128
+        && data.title is string
+        && data.title.size() >= 1
+        && data.title.size() <= 140
+        && isValidModel(data.model)
+        && isValidThinkingLevel(data.thinkingLevel)
+        && data.systemInstruction is string
+        && data.systemInstruction.size() <= 4000
+        && data.useSearch is bool
+        && data.pinned is bool
+        && data.messageCount is int
+        && data.messageCount >= 0
+        && data.messageCount <= 5000
+        && data.lastMessagePreview is string
+        && data.lastMessagePreview.size() <= 240
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChatMessage(data, userId, threadId) {
+      return data.keys().hasAll(['ownerId', 'threadId', 'role', 'text', 'createdAt'])
+        && data.keys().hasOnly([
+          'ownerId', 'threadId', 'role', 'text', 'model',
+          'sources', 'attachmentNames', 'totalTokens', 'createdAt'
+        ])
+        && data.ownerId is string
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && data.ownerId.size() >= 1
+        && data.ownerId.size() <= 128
+        && data.threadId is string
+        && data.threadId == threadId
+        && data.threadId.size() >= 1
+        && data.threadId.size() <= 128
+        && data.role is string
+        && data.role in ['user', 'model']
+        && data.text is string
+        && data.text.size() <= 50000
+        && (!('model' in data) || (data.model is string && data.model.size() <= 64))
+        && (!('sources' in data) || isValidSourcesList(data.sources))
+        && (!('attachmentNames' in data) || isValidAttachmentNames(data.attachmentNames))
+        && (!('totalTokens' in data) || (data.totalTokens is int && data.totalTokens >= 0 && data.totalTokens <= 2000000))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidVesperModule(data, userId) {
+      return data.keys().hasAll([
+          'ownerId', 'name', 'command', 'description',
+          'instruction', 'enabled', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'name', 'command', 'description',
+          'instruction', 'enabled', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && data.ownerId.size() >= 1
+        && data.ownerId.size() <= 128
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 60
+        && data.command is string
+        && data.command.size() >= 2
+        && data.command.size() <= 32
+        && data.command.matches('^/[a-z0-9_\\-]+$')
+        && data.description is string
+        && data.description.size() <= 200
+        && data.instruction is string
+        && data.instruction.size() >= 1
+        && data.instruction.size() <= 2000
+        && data.enabled is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isParentThreadOwner(userId, threadId) {
+      return get(/databases/$(database)/documents/users/$(userId)/threads/$(threadId)).data.ownerId == request.auth.uid;
+    }
+
+    // --- User Profile & Preferences ---
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'photoURL', 'updatedAt'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['defaultModel', 'defaultThinkingLevel', 'defaultSystemInstruction', 'updatedAt'])
+        );
+      allow delete: if false;
+
+      // --- User Custom Modules ---
+      match /modules/{moduleId} {
+        allow get: if isValidId(userId)
+          && isValidId(moduleId)
+          && isOwner(userId)
+          && existing().ownerId == request.auth.uid;
+        allow list: if isOwner(userId)
+          && resource.data.ownerId == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(moduleId)
+          && isOwner(userId)
+          && isValidVesperModule(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(moduleId)
+          && isOwner(userId)
+          && isValidVesperModule(incoming(), userId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'command', 'description', 'instruction', 'enabled', 'updatedAt']);
+        allow delete: if isValidId(userId)
+          && isValidId(moduleId)
+          && isOwner(userId)
+          && existing().ownerId == request.auth.uid;
+      }
+
+      // --- User Chat Threads ---
+      match /threads/{threadId} {
+        allow get: if isValidId(userId)
+          && isValidId(threadId)
+          && isOwner(userId)
+          && existing().ownerId == request.auth.uid;
+        allow list: if isOwner(userId)
+          && resource.data.ownerId == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(threadId)
+          && isOwner(userId)
+          && isValidChatThread(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(threadId)
+          && isOwner(userId)
+          && isValidChatThread(incoming(), userId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['pinned', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['model', 'thinkingLevel', 'systemInstruction', 'useSearch', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['messageCount', 'lastMessagePreview', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['title', 'messageCount', 'lastMessagePreview', 'updatedAt'])
+          );
+        allow delete: if isValidId(userId)
+          && isValidId(threadId)
+          && isOwner(userId)
+          && existing().ownerId == request.auth.uid;
+
+        // --- Thread Messages ---
+        match /messages/{messageId} {
+          allow get: if isValidId(userId)
+            && isValidId(threadId)
+            && isValidId(messageId)
+            && isOwner(userId)
+            && existing().ownerId == request.auth.uid
+            && isParentThreadOwner(userId, threadId);
+          allow list: if isValidId(userId)
+            && isValidId(threadId)
+            && isOwner(userId)
+            && resource.data.ownerId == request.auth.uid;
+          allow create: if isValidId(userId)
+            && isValidId(threadId)
+            && isValidId(messageId)
+            && isOwner(userId)
+            && isValidChatMessage(incoming(), userId, threadId)
+            && incoming().createdAt == request.time
+            && isParentThreadOwner(userId, threadId);
+          allow update: if false;
+          allow delete: if isValidId(userId)
+            && isValidId(threadId)
+            && isValidId(messageId)
+            && isOwner(userId)
+            && existing().ownerId == request.auth.uid
+            && isParentThreadOwner(userId, threadId);
+        }
+      }
+    }
+  }
+}
