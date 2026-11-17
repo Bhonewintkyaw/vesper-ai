@@ -13,6 +13,9 @@
   },
   "dependencies": {
     "@firebase/eslint-plugin-security-rules": "^0.0.2",
+    "@fontsource/dm-sans": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/plus-jakarta-sans": "^5.3.0",
     "@google/genai": "^3.4.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/ws": "^8.18.2",

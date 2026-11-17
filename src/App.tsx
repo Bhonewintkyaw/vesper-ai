@@ -177,6 +177,18 @@ function resolveFreeModelConfig(options: ComposerSendOptions): {
   };
 }
 
+function isCloudNetworkError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err || '')).toLowerCase();
+  if (msg.includes('permission') || msg.includes('insufficient')) return false;
+  return (
+    msg.includes('offline') ||
+    msg.includes('unavailable') ||
+    msg.includes('network') ||
+    msg.includes('failed to fetch') ||
+    msg.includes('deadline-exceeded')
+  );
+}
+
 export default function App() {
   const [isDark, setIsDark] = useState<boolean>(() => {
     try {
@@ -298,7 +310,12 @@ export default function App() {
   }, [builtInToggles]);
 
   useEffect(() => {
+    const authTimeout = window.setTimeout(() => {
+      setAuthReady(true);
+    }, 4000);
+
     const unsub = onAuthStateChanged(auth, async (nextUser) => {
+      window.clearTimeout(authTimeout);
       setUser(nextUser);
       setAuthReady(true);
       if (nextUser && nextUser.emailVerified) {
@@ -314,7 +331,10 @@ export default function App() {
         setCloudModules([]);
       }
     });
-    return () => unsub();
+    return () => {
+      window.clearTimeout(authTimeout);
+      unsub();
+    };
   }, []);
 
   useEffect(() => {
@@ -408,7 +428,16 @@ export default function App() {
       await signInWithGoogle();
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Sign-in failed.';
-      if (!msg.includes('popup-closed-by-user')) {
+      if (msg.includes('popup-closed-by-user')) return;
+      if (msg.includes('network-request-failed') || msg.includes('internal-error')) {
+        setAuthError(
+          'Could not reach Google Sign-In on this network. You can keep chatting in Guest mode.'
+        );
+      } else if (msg.includes('popup-blocked')) {
+        setAuthError(
+          'Sign-in popup was blocked by your browser. Allow popups and try again.'
+        );
+      } else {
         setAuthError('Could not complete Google sign-in. Please try again.');
       }
     }
@@ -566,14 +595,7 @@ export default function App() {
 
     const previewText = savedMsg.text.replace(/\s+/g, ' ').slice(0, LIMITS.PREVIEW_MAX);
 
-    if (isAuthenticated && user) {
-      await createMessageRecord(user.uid, threadSnapshot.id, savedMsg);
-      await updateThreadSummary(user.uid, threadSnapshot.id, {
-        ...(generatedTitle ? { title: generatedTitle } : {}),
-        messageCount: nextCount,
-        lastMessagePreview: previewText,
-      });
-    } else {
+    const saveLocally = () => {
       setGuestMessagesMap((prev) => ({
         ...prev,
         [threadSnapshot.id]: [...(prev[threadSnapshot.id] || []), savedMsg],
@@ -591,6 +613,25 @@ export default function App() {
             : t
         )
       );
+    };
+
+    if (isAuthenticated && user) {
+      try {
+        await createMessageRecord(user.uid, threadSnapshot.id, savedMsg);
+        await updateThreadSummary(user.uid, threadSnapshot.id, {
+          ...(generatedTitle ? { title: generatedTitle } : {}),
+          messageCount: nextCount,
+          lastMessagePreview: previewText,
+        });
+      } catch (err) {
+        if (isCloudNetworkError(err)) {
+          saveLocally();
+        } else {
+          throw err;
+        }
+      }
+    } else {
+      saveLocally();
     }
   };
 
@@ -808,44 +849,68 @@ export default function App() {
       createdAtMs: Date.now(),
     };
 
+    const saveFirstTurnLocally = () => {
+      setGuestThreads((prev) => [targetThread, ...prev]);
+      setGuestMessagesMap((prev) => ({
+        ...prev,
+        [targetThread.id]: [userMsg],
+      }));
+    };
+
+    const saveNextTurnLocally = (nextCount: number) => {
+      setGuestMessagesMap((prev) => ({
+        ...prev,
+        [targetThread.id]: [...(prev[targetThread.id] || []), userMsg],
+      }));
+      setGuestThreads((prev) =>
+        prev.map((t) =>
+          t.id === targetThread.id
+            ? {
+                ...t,
+                messageCount: nextCount,
+                lastMessagePreview: userMsg.text.slice(0, LIMITS.PREVIEW_MAX),
+                updatedAtMs: Date.now(),
+              }
+            : t
+        )
+      );
+    };
+
     if (isFirstTurn) {
       if (isAuthenticated && user) {
-        await createThreadRecord(user.uid, targetThread);
-        await createMessageRecord(user.uid, targetThread.id, userMsg);
+        try {
+          await createThreadRecord(user.uid, targetThread);
+          await createMessageRecord(user.uid, targetThread.id, userMsg);
+        } catch (err) {
+          if (isCloudNetworkError(err)) {
+            saveFirstTurnLocally();
+          } else {
+            throw err;
+          }
+        }
       } else {
-        setGuestThreads((prev) => [targetThread, ...prev]);
-        setGuestMessagesMap((prev) => ({
-          ...prev,
-          [targetThread.id]: [userMsg],
-        }));
+        saveFirstTurnLocally();
       }
       setActiveThreadId(targetThread.id);
       setDraftThread(createEmptyThread(prefs));
     } else {
       const nextCount = baseMessages.length + 1;
       if (isAuthenticated && user) {
-        await createMessageRecord(user.uid, targetThread.id, userMsg);
-        await updateThreadSummary(user.uid, targetThread.id, {
-          messageCount: nextCount,
-          lastMessagePreview: userMsg.text.slice(0, LIMITS.PREVIEW_MAX),
-        });
+        try {
+          await createMessageRecord(user.uid, targetThread.id, userMsg);
+          await updateThreadSummary(user.uid, targetThread.id, {
+            messageCount: nextCount,
+            lastMessagePreview: userMsg.text.slice(0, LIMITS.PREVIEW_MAX),
+          });
+        } catch (err) {
+          if (isCloudNetworkError(err)) {
+            saveNextTurnLocally(nextCount);
+          } else {
+            throw err;
+          }
+        }
       } else {
-        setGuestMessagesMap((prev) => ({
-          ...prev,
-          [targetThread.id]: [...(prev[targetThread.id] || []), userMsg],
-        }));
-        setGuestThreads((prev) =>
-          prev.map((t) =>
-            t.id === targetThread.id
-              ? {
-                  ...t,
-                  messageCount: nextCount,
-                  lastMessagePreview: userMsg.text.slice(0, LIMITS.PREVIEW_MAX),
-                  updatedAtMs: Date.now(),
-                }
-              : t
-          )
-        );
+        saveNextTurnLocally(nextCount);
       }
     }
 

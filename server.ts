@@ -333,6 +333,7 @@ async function startServer() {
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders?.();
 
     let clientClosed = false;
@@ -636,6 +637,15 @@ async function startServer() {
     let session: Awaited<ReturnType<GoogleGenAI['live']['connect']>> | null = null;
     let closedByClient = false;
     let sentError = false;
+    const pingTimer = setInterval(() => {
+      if (clientWs.readyState === WebSocket.OPEN) {
+        try {
+          clientWs.ping();
+        } catch {
+          // ignore ping errors
+        }
+      }
+    }, 25000);
 
     const reqUrl = new URL(req.url || '/api/live', `http://${req.headers.host || 'localhost'}`);
     const mode: AdaptiveMode = reqUrl.searchParams.get('mode') === 'expert' ? 'expert' : 'learning';
@@ -645,6 +655,7 @@ async function startServer() {
 
     clientWs.on('close', () => {
       closedByClient = true;
+      clearInterval(pingTimer);
       try {
         session?.close();
       } catch {
