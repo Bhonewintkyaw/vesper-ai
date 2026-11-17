@@ -833,6 +833,97 @@ export default function App() {
     }
   };
 
+  const runFreeImageGeneration = async (
+    threadSnapshot: ChatThread,
+    promptText: string,
+    isFirstTurn: boolean,
+    firstUserPrompt: string,
+    nextMessageNumber: number
+  ) => {
+    const assistantMsgId = generateSafeId('msg');
+    setIsStreaming(true);
+    setStreamingMessage({
+      id: assistantMsgId,
+      threadId: threadSnapshot.id,
+      role: 'model',
+      text: 'Generating free image with Flux...',
+      model: 'flux-free',
+      createdAtMs: Date.now(),
+      isStreaming: true,
+    });
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    let generatedMarkdown = '';
+    let finalError: string | undefined;
+    let wasAborted = false;
+
+    try {
+      const res = await fetch('/api/image/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: promptText }),
+        signal: controller.signal,
+      });
+
+      const rawText = (await res.text()).trim();
+      let parsed: { imageUrl?: string; error?: string } = {};
+      if (rawText) {
+        try {
+          parsed = JSON.parse(rawText) as { imageUrl?: string; error?: string };
+        } catch {
+          // ignore non-JSON body
+        }
+      }
+
+      if (!res.ok || !parsed.imageUrl) {
+        throw new Error(parsed.error || `Image generator returned status ${res.status}`);
+      }
+
+      const safeAlt = promptText.replace(/[\[\]\r\n]/g, ' ').trim().slice(0, 140) || 'Generated image';
+      generatedMarkdown = `![${safeAlt}](${parsed.imageUrl})\n\nGenerated with **Flux Free** for: *${safeAlt}*`;
+    } catch (err) {
+      if ((err as { name?: string })?.name === 'AbortError') {
+        wasAborted = true;
+      } else {
+        finalError = err instanceof Error ? err.message : 'Could not generate image right now.';
+      }
+    } finally {
+      setIsStreaming(false);
+      abortControllerRef.current = null;
+    }
+
+    if (!generatedMarkdown && !finalError && !wasAborted) {
+      finalError = 'No image was returned. Please try again.';
+    }
+
+    const completedMsg: ChatMessage = {
+      id: assistantMsgId,
+      threadId: threadSnapshot.id,
+      role: 'model',
+      text: generatedMarkdown,
+      model: 'flux-free',
+      createdAtMs: Date.now(),
+      isStreaming: false,
+      error: finalError,
+    };
+
+    if (completedMsg.text || (wasAborted && !completedMsg.error)) {
+      const savedMsg: ChatMessage = { ...completedMsg, text: completedMsg.text || '(Stopped)' };
+      await persistCompletedMessage(
+        threadSnapshot,
+        savedMsg,
+        isFirstTurn,
+        firstUserPrompt,
+        nextMessageNumber
+      );
+      setStreamingMessage(null);
+    } else {
+      setStreamingMessage(completedMsg);
+    }
+  };
+
   const handleSend = async (
     rawText: string,
     attachments: AttachmentItem[],
@@ -844,6 +935,12 @@ export default function App() {
     if (isStreaming) return;
     const text = rawText.trim();
     if (!text && attachments.length === 0) return;
+
+    const isImageGen =
+      (options.mode === 'image' || /^\/image\b/i.test(text)) && attachments.length === 0;
+    const imagePrompt = isImageGen
+      ? text.replace(/^\/image\s*/i, '').trim() || 'A vivid artistic illustration'
+      : '';
 
     const modelConfig = resolveFreeModelConfig(options);
     const isFirstTurn = !activeSavedThread;
@@ -938,13 +1035,23 @@ export default function App() {
     }
 
     const conversationForApi = [...baseMessages, userMsg];
-    await runGeminiStream(
-      targetThread,
-      conversationForApi,
-      isFirstTurn,
-      userMsg.text,
-      modelConfig
-    );
+    if (isImageGen) {
+      await runFreeImageGeneration(
+        targetThread,
+        imagePrompt,
+        isFirstTurn,
+        userMsg.text,
+        conversationForApi.length + 1
+      );
+    } else {
+      await runGeminiStream(
+        targetThread,
+        conversationForApi,
+        isFirstTurn,
+        userMsg.text,
+        modelConfig
+      );
+    }
   };
 
   const handleSaveVoiceTranscript = async (
@@ -1027,6 +1134,11 @@ export default function App() {
     let modelToUse: 'gemini-4-hydrogen' | 'gemini-3.1-flash-lite' =
       activeThread.model === 'gemini-4-hydrogen' ? 'gemini-4-hydrogen' : 'gemini-3.1-flash-lite';
 
+    const wasImageGen =
+      streamingMessage?.model === 'flux-free' ||
+      (last.role === 'model' && last.model === 'flux-free') ||
+      (last.role === 'user' && /^\/image\b/i.test(last.text));
+
     if (last.role === 'model') {
       wasSearch = Boolean(last.sources?.length);
       if (last.model === 'gemini-4-hydrogen') modelToUse = 'gemini-4-hydrogen';
@@ -1041,6 +1153,18 @@ export default function App() {
       }
     }
     if (historyWithoutLast.length === 0) return;
+    const lastUser = [...historyWithoutLast].reverse().find((m) => m.role === 'user');
+    if (wasImageGen && lastUser) {
+      const promptClean = lastUser.text.replace(/^\/image\s*/i, '').trim() || 'A vivid artistic illustration';
+      await runFreeImageGeneration(
+        activeThread,
+        promptClean,
+        false,
+        historyWithoutLast[0]?.text || promptClean,
+        historyWithoutLast.length + 1
+      );
+      return;
+    }
     await runGeminiStream(
       activeThread,
       historyWithoutLast,

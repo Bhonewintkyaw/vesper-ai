@@ -764,4 +764,87 @@ export async function handleTts(req: ApiRequest, res: ApiResponse) {
   }
 }
 
+interface ImageGenerateRequestBody {
+  prompt?: string;
+  width?: number;
+  height?: number;
+  seed?: number;
+}
+
+export async function handleImageGenerate(req: ApiRequest, res: ApiResponse) {
+  if (req.method !== 'POST') {
+    sendJson(res, 405, { error: 'Method not allowed.' });
+    return;
+  }
+
+  const body = await getParsedBody<ImageGenerateRequestBody>(req);
+  const rawPrompt = typeof body.prompt === 'string' ? body.prompt : '';
+  const prompt = rawPrompt.replace(/\s+/g, ' ').trim().slice(0, 800);
+
+  if (!prompt) {
+    sendJson(res, 400, { error: 'An image description prompt is required.' });
+    return;
+  }
+
+  const width =
+    typeof body.width === 'number' && body.width >= 256 && body.width <= 1024
+      ? Math.round(body.width)
+      : 768;
+  const height =
+    typeof body.height === 'number' && body.height >= 256 && body.height <= 1024
+      ? Math.round(body.height)
+      : 768;
+  const seed =
+    typeof body.seed === 'number' && Number.isFinite(body.seed)
+      ? Math.abs(Math.floor(body.seed))
+      : Math.floor(Math.random() * 1_000_000_000);
+
+  const modelsToTry = ['flux', 'turbo'] as const;
+  let lastStatus = 502;
+  let lastError = 'Image generator did not return an image.';
+
+  for (const modelVariant of modelsToTry) {
+    const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(
+      prompt
+    )}?width=${width}&height=${height}&model=${modelVariant}&seed=${seed}&nologo=true`;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 35000);
+
+    try {
+      const upstream = await fetch(imageUrl, {
+        method: 'GET',
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      const contentType = upstream.headers.get('content-type') || '';
+      if (upstream.ok && contentType.startsWith('image/')) {
+        // Consume body briefly so the upstream generation caches cleanly for the client browser.
+        await upstream.arrayBuffer();
+        sendJson(res, 200, {
+          imageUrl,
+          prompt,
+          seed,
+          model: 'flux-free',
+        });
+        return;
+      }
+
+      lastStatus = upstream.status || 502;
+      lastError = `Image service returned status ${lastStatus}.`;
+    } catch (err) {
+      clearTimeout(timer);
+      const isTimeout = (err as { name?: string })?.name === 'AbortError';
+      lastStatus = isTimeout ? 504 : 502;
+      lastError = isTimeout
+        ? 'Image generation timed out. Please try a shorter prompt.'
+        : 'Could not reach the free image generation service.';
+    }
+  }
+
+  sendJson(res, lastStatus >= 400 && lastStatus < 600 ? lastStatus : 502, {
+    error: lastError,
+  });
+}
 

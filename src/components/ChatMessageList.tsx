@@ -63,6 +63,8 @@ function formatModelLabel(model?: ChatModelId): string | null {
       return 'Hydrogen 4';
     case 'gemini-3.8-live':
       return 'Live Voice';
+    case 'flux-free':
+      return 'Flux Free Image';
     default:
       return null;
   }

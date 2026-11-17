@@ -628,7 +628,9 @@ export function Composer({
   };
 
   const placeholderText =
-    mode === 'search'
+    mode === 'image'
+      ? 'Describe an image to generate for free (e.g. a cozy rainy cafe in Tokyo)...'
+      : mode === 'search'
       ? 'Search live web info with Google Search...'
       : mode === 'url'
       ? 'Paste a web link (https://...) and ask Vesper to read or summarize it...'
@@ -847,6 +849,18 @@ export function Composer({
                 <Link2 className="h-3.5 w-3.5" />
                 <span>URL Reader</span>
               </button>
+              <button
+                type="button"
+                onClick={() => setMode('image')}
+                className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                  mode === 'image'
+                    ? 'bg-white text-slate-900 shadow-xs dark:bg-[#181b26] dark:text-[#4cd7f6] dark:ring-1 dark:ring-[#06b6d4]/50'
+                    : 'text-slate-500 hover:text-slate-900 dark:text-[#94a3b8] dark:hover:text-[#f8fafc]'
+                }`}
+              >
+                <ImageIcon className="h-3.5 w-3.5" />
+                <span>Image</span>
+              </button>
             </div>
 
             <div className="flex items-center gap-2">
@@ -869,21 +883,29 @@ export function Composer({
                 <History className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">History</span>
               </button>
-              <label htmlFor="free-model-select" className="sr-only">
-                AI Model
-              </label>
-              <select
-                id="free-model-select"
-                value={mode === 'chat' ? modelPreset : 'hydrogen-fast'}
-                disabled={mode !== 'chat'}
-                onChange={(e) => setModelPreset(e.target.value as FreeModelPreset)}
-                aria-label="Select free AI model"
-                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-mono text-[11px] text-slate-700 focus:border-[#8b5cf6] focus:outline-none disabled:opacity-65 dark:border-[#1e2333] dark:bg-[#181b26] dark:text-[#cbd3e1]"
-              >
-                <option value="flash-lite">Flash Lite (Instant)</option>
-                <option value="hydrogen-fast">Hydrogen 4 (Smart)</option>
-                <option value="hydrogen-deep">Hydrogen 4 (Deep Think)</option>
-              </select>
+              {mode === 'image' ? (
+                <span className="rounded-lg border border-cyan-200 bg-cyan-50 px-2.5 py-1 font-mono text-[11px] font-medium text-cyan-800 dark:border-[#06b6d4]/40 dark:bg-[#06b6d4]/10 dark:text-[#4cd7f6]">
+                  Flux Free (Image)
+                </span>
+              ) : (
+                <>
+                  <label htmlFor="free-model-select" className="sr-only">
+                    AI Model
+                  </label>
+                  <select
+                    id="free-model-select"
+                    value={mode === 'chat' ? modelPreset : 'hydrogen-fast'}
+                    disabled={mode !== 'chat'}
+                    onChange={(e) => setModelPreset(e.target.value as FreeModelPreset)}
+                    aria-label="Select free AI model"
+                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-mono text-[11px] text-slate-700 focus:border-[#8b5cf6] focus:outline-none disabled:opacity-65 dark:border-[#1e2333] dark:bg-[#181b26] dark:text-[#cbd3e1]"
+                  >
+                    <option value="flash-lite">Flash Lite (Instant)</option>
+                    <option value="hydrogen-fast">Hydrogen 4 (Smart)</option>
+                    <option value="hydrogen-deep">Hydrogen 4 (Deep Think)</option>
+                  </select>
+                </>
+              )}
             </div>
           </div>
 

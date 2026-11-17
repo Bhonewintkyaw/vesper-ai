@@ -3,13 +3,14 @@ export type ChatModelId =
   | 'gemini-3.1-flash-lite'
   | 'gemini-3.8-live'
   | 'gemini-3.5-transcribe'
-  | 'gemini-3.8-flash-lite-tts';
+  | 'gemini-3.8-flash-lite-tts'
+  | 'flux-free';
 
 export type ThinkingDepth = 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH' | 'XHIGH';
 
 export type AdaptiveMode = 'expert' | 'learning';
 
-export type ComposerMode = 'chat' | 'search' | 'url';
+export type ComposerMode = 'chat' | 'search' | 'url' | 'image';
 
 export type FreeModelPreset = 'flash-lite' | 'hydrogen-fast' | 'hydrogen-deep';
 

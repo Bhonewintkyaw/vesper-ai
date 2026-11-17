@@ -13,6 +13,7 @@ import {
   handleChatStream,
   handleChatTitle,
   handleHealth,
+  handleImageGenerate,
   handleTranscribe,
   handleTts,
   mapGeminiError,
@@ -34,6 +35,7 @@ async function startServer() {
   app.post('/api/chat/title', (req, res) => handleChatTitle(req as ApiRequest, res as unknown as ApiResponse));
   app.post('/api/transcribe', (req, res) => handleTranscribe(req as ApiRequest, res as unknown as ApiResponse));
   app.post('/api/tts', (req, res) => handleTts(req as ApiRequest, res as unknown as ApiResponse));
+  app.post('/api/image/generate', (req, res) => handleImageGenerate(req as ApiRequest, res as unknown as ApiResponse));
 
   const httpServer = http.createServer(app);
 
