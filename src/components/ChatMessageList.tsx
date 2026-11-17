@@ -164,8 +164,8 @@ export function ChatMessageList({
 
   if (messages.length === 0) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center px-5 py-12">
-        <div className="w-full max-w-2xl">
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6 sm:py-10">
+        <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center">
           <h1
             className="font-display text-3xl font-bold tracking-[-0.03em] text-slate-950 sm:text-4xl dark:text-[#f8fafc]"
             style={{ textWrap: 'balance' }}
@@ -176,7 +176,7 @@ export function ChatMessageList({
             Ask a question, share a snippet, or just chat. I&apos;m ready whenever you are.
           </p>
 
-          <div className="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="mt-6 grid grid-cols-1 gap-3 sm:mt-8 sm:grid-cols-2">
             {VESPER_STARTERS.map((item) => (
               <button
                 key={item.title}

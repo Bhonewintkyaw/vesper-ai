@@ -1060,7 +1060,7 @@ export default function App() {
   };
 
   return (
-    <div className="relative flex h-screen w-full overflow-hidden bg-white text-slate-900 dark:bg-[#090a0f] dark:text-[#e3e1e9]">
+    <div className="relative flex h-dvh w-full overflow-hidden bg-white text-slate-900 dark:bg-[#090a0f] dark:text-[#e3e1e9]">
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 hidden dark:block"

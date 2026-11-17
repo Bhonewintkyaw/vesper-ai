@@ -635,7 +635,7 @@ export function Composer({
       : 'Message Vesper...';
 
   return (
-    <div className="px-4 pt-2 pb-[calc(env(safe-area-inset-bottom)+1rem)] sm:px-6">
+    <div className="shrink-0 px-4 pt-2 pb-[calc(env(safe-area-inset-bottom)+1rem)] sm:px-6">
       <div className="relative mx-auto max-w-2xl">
         {historyOpen && (
           <div className="absolute right-0 bottom-full left-0 z-30 mb-2 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg dark:border-[#1e2333] dark:border-t-white/10 dark:bg-[#181b26]/95 dark:shadow-[0_0_32px_-8px_rgba(139,92,246,0.28)] dark:backdrop-blur-2xl">
@@ -888,7 +888,7 @@ export function Composer({
           </div>
 
           {editingAttachment && (
-            <div className="border-b border-slate-200/80 bg-white/95 px-3.5 py-3 dark:border-[#1e2333] dark:bg-[#121520]">
+            <div className="max-h-[32vh] overflow-y-auto border-b border-slate-200/80 bg-white/95 px-3.5 py-2.5 dark:border-[#1e2333] dark:bg-[#121520]">
               <div className="mb-2.5 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <ImageIcon className="h-3.5 w-3.5 text-[#8b5cf6] dark:text-[#4cd7f6]" />
@@ -1050,7 +1050,7 @@ export function Composer({
           )}
 
           {attachments.length > 0 && (
-            <div className="space-y-2 border-b border-slate-200/80 px-3.5 pt-3 pb-2.5 dark:border-[#1e2333]">
+            <div className="max-h-[24vh] space-y-2 overflow-y-auto border-b border-slate-200/80 px-3.5 pt-2.5 pb-2 dark:border-[#1e2333]">
               <div className="flex flex-wrap gap-2">
                 {attachments.map((att) => {
                   const isImage = att.mimeType.startsWith('image/');
