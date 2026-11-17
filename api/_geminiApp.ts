@@ -1,11 +1,20 @@
-import 'dotenv/config';
-import express from 'express';
-import type { Express, Request, Response } from 'express';
 import {
   GoogleGenAI,
   ThinkingLevel,
 } from '@google/genai';
 import type { Content, Part } from '@google/genai';
+import type { IncomingMessage as NodeIncomingMessage, ServerResponse as NodeServerResponse } from 'node:http';
+
+export type ApiRequest = NodeIncomingMessage & {
+  body?: unknown;
+  method?: string;
+};
+
+export type ApiResponse = NodeServerResponse & {
+  status?: (code: number) => ApiResponse;
+  json?: (body: unknown) => ApiResponse;
+  flushHeaders?: () => void;
+};
 
 export type ChatModelId = 'gemini-4-hydrogen' | 'gemini-3.1-flash-lite';
 export type ThinkingDepth = 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH' | 'XHIGH';
@@ -287,13 +296,10 @@ function buildContents(messages: IncomingMessage[]): Content[] {
   return contents;
 }
 
-function sendJson(res: Response, statusCode: number, payload: unknown) {
-  const anyRes = res as Response & {
-    status?: (code: number) => Response;
-    json?: (body: unknown) => Response;
-  };
-  if (typeof anyRes.status === 'function' && typeof anyRes.json === 'function') {
-    anyRes.status(statusCode).json(payload);
+function sendJson(res: ApiResponse, statusCode: number, payload: unknown) {
+  if (typeof res.status === 'function' && typeof res.json === 'function') {
+    res.status(statusCode);
+    res.json(payload);
     return;
   }
   res.statusCode = statusCode;
@@ -301,8 +307,8 @@ function sendJson(res: Response, statusCode: number, payload: unknown) {
   res.end(JSON.stringify(payload));
 }
 
-async function getParsedBody<T>(req: Request): Promise<T> {
-  const raw = (req as Request & { body?: unknown }).body;
+async function getParsedBody<T>(req: ApiRequest): Promise<T> {
+  const raw = req.body;
   if (raw !== undefined && raw !== null) {
     if (Buffer.isBuffer(raw)) {
       const str = raw.toString('utf8').trim();
@@ -372,12 +378,12 @@ async function getParsedBody<T>(req: Request): Promise<T> {
   });
 }
 
-export function handleHealth(_req: Request, res: Response) {
+export function handleHealth(_req: ApiRequest, res: ApiResponse) {
   res.setHeader('Cache-Control', 'no-store');
   sendJson(res, 200, { ok: true });
 }
 
-export async function handleChatStream(req: Request, res: Response) {
+export async function handleChatStream(req: ApiRequest, res: ApiResponse) {
   if (req.method !== 'POST') {
     sendJson(res, 405, { error: 'Method not allowed.' });
     return;
@@ -500,7 +506,7 @@ export async function handleChatStream(req: Request, res: Response) {
   }
 }
 
-export async function handleChatTitle(req: Request, res: Response) {
+export async function handleChatTitle(req: ApiRequest, res: ApiResponse) {
   if (req.method !== 'POST') {
     sendJson(res, 405, { error: 'Method not allowed.' });
     return;
@@ -533,7 +539,7 @@ export async function handleChatTitle(req: Request, res: Response) {
   }
 }
 
-export async function handleTranscribe(req: Request, res: Response) {
+export async function handleTranscribe(req: ApiRequest, res: ApiResponse) {
   if (req.method !== 'POST') {
     sendJson(res, 405, { error: 'Method not allowed.' });
     return;
@@ -633,7 +639,7 @@ export async function handleTranscribe(req: Request, res: Response) {
   }
 }
 
-export async function handleTts(req: Request, res: Response) {
+export async function handleTts(req: ApiRequest, res: ApiResponse) {
   if (req.method !== 'POST') {
     sendJson(res, 405, { error: 'Method not allowed.' });
     return;
@@ -705,15 +711,4 @@ export async function handleTts(req: Request, res: Response) {
   }
 }
 
-export function createGeminiApiApp(): Express {
-  const app = express();
-  app.use(express.json({ limit: '20mb' }));
 
-  app.get('/api/health', handleHealth);
-  app.post('/api/chat/stream', handleChatStream);
-  app.post('/api/chat/title', handleChatTitle);
-  app.post('/api/transcribe', handleTranscribe);
-  app.post('/api/tts', handleTts);
-
-  return app;
-}

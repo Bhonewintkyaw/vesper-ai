@@ -1,3 +1,6 @@
-import { handleTranscribe } from './_geminiApp';
+import { handleTranscribe } from './_geminiApp.js';
+import type { ApiRequest, ApiResponse } from './_geminiApp.js';
 
-export default handleTranscribe;
+export default async function handler(req: ApiRequest, res: ApiResponse) {
+  return handleTranscribe(req, res);
+}

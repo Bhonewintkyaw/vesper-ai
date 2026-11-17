@@ -709,8 +709,20 @@ export default function App() {
       if (!res.ok || !res.body) {
         let errText = `Server returned status ${res.status}`;
         try {
-          const errJson = await res.json();
-          if (errJson?.error) errText = errJson.error;
+          const rawBody = (await res.text()).trim();
+          if (rawBody) {
+            try {
+              const errJson = JSON.parse(rawBody) as { error?: string };
+              if (errJson?.error) {
+                errText = errJson.error;
+              }
+            } catch {
+              const firstLine = rawBody.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+              if (firstLine) {
+                errText = `Server returned status ${res.status}: ${firstLine}`;
+              }
+            }
+          }
         } catch {
           // ignore
         }

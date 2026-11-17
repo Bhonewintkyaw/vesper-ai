@@ -1,3 +1,6 @@
-import { handleChatTitle } from '../_geminiApp';
+import { handleChatTitle } from '../_geminiApp.js';
+import type { ApiRequest, ApiResponse } from '../_geminiApp.js';
 
-export default handleChatTitle;
+export default async function handler(req: ApiRequest, res: ApiResponse) {
+  return handleChatTitle(req, res);
+}

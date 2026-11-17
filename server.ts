@@ -9,12 +9,16 @@ import { GoogleGenAI, Modality } from '@google/genai';
 import type { LiveServerMessage } from '@google/genai';
 import {
   buildVoiceSystemInstruction,
-  createGeminiApiApp,
   getGeminiClient,
+  handleChatStream,
+  handleChatTitle,
+  handleHealth,
+  handleTranscribe,
+  handleTts,
   mapGeminiError,
   VALID_VOICES,
 } from './api/_geminiApp.ts';
-import type { AdaptiveMode } from './api/_geminiApp.ts';
+import type { AdaptiveMode, ApiRequest, ApiResponse } from './api/_geminiApp.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,7 +26,15 @@ const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT || 3000);
 
 async function startServer() {
-  const app = createGeminiApiApp();
+  const app = express();
+  app.use(express.json({ limit: '20mb' }));
+
+  app.get('/api/health', (req, res) => handleHealth(req as ApiRequest, res as unknown as ApiResponse));
+  app.post('/api/chat/stream', (req, res) => handleChatStream(req as ApiRequest, res as unknown as ApiResponse));
+  app.post('/api/chat/title', (req, res) => handleChatTitle(req as ApiRequest, res as unknown as ApiResponse));
+  app.post('/api/transcribe', (req, res) => handleTranscribe(req as ApiRequest, res as unknown as ApiResponse));
+  app.post('/api/tts', (req, res) => handleTts(req as ApiRequest, res as unknown as ApiResponse));
+
   const httpServer = http.createServer(app);
 
   const wss = new WebSocketServer({ noServer: true });

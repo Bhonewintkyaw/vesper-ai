@@ -1,3 +1,6 @@
-import { handleHealth } from './_geminiApp';
+import { handleHealth } from './_geminiApp.js';
+import type { ApiRequest, ApiResponse } from './_geminiApp.js';
 
-export default handleHealth;
+export default function handler(req: ApiRequest, res: ApiResponse) {
+  return handleHealth(req, res);
+}
