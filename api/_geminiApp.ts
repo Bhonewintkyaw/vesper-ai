@@ -781,12 +781,12 @@ interface AiHordeModelInfo {
 const AI_HORDE_BASE = 'https://aihorde.net/api/v2';
 const AI_HORDE_CLIENT_AGENT = 'VesperAI:1.0:vesper';
 const AI_HORDE_PREFERRED_MODELS = [
+  'AlbedoBase XL (SDXL)',
+  'Juggernaut XL',
   'Deliberate',
   "ICBINP - I Can't Believe It's Not Photography",
   'DreamShaper',
   'Realistic Vision',
-  'AlbedoBase XL (SDXL)',
-  'Juggernaut XL',
   'stable_diffusion',
 ];
 
@@ -813,7 +813,12 @@ async function fetchJsonWithTimeout<T>(
 }
 
 async function pickFastOnlineHordeModels(): Promise<string[]> {
-  const fallback = ['Deliberate', "ICBINP - I Can't Believe It's Not Photography", 'stable_diffusion'];
+  const fallback = [
+    'AlbedoBase XL (SDXL)',
+    'Deliberate',
+    "ICBINP - I Can't Believe It's Not Photography",
+    'stable_diffusion',
+  ];
   try {
     const res = await fetchJsonWithTimeout<AiHordeModelInfo[]>(
       `${AI_HORDE_BASE}/status/models?type=image`,
@@ -836,11 +841,20 @@ async function pickFastOnlineHordeModels(): Promise<string[]> {
       }
     }
 
-    const available = AI_HORDE_PREFERRED_MODELS.filter((name) => byName.has(name)).sort(
+    const fastHighQuality = AI_HORDE_PREFERRED_MODELS.filter((name) => {
+      const info = byName.get(name);
+      return info && (info.eta ?? 999) <= 20;
+    });
+
+    if (fastHighQuality.length > 0) {
+      return fastHighQuality.slice(0, 4);
+    }
+
+    const anyOnline = AI_HORDE_PREFERRED_MODELS.filter((name) => byName.has(name)).sort(
       (a, b) => (byName.get(a)?.eta ?? 999) - (byName.get(b)?.eta ?? 999)
     );
 
-    return available.length > 0 ? available.slice(0, 4) : fallback;
+    return anyOnline.length > 0 ? anyOnline.slice(0, 4) : fallback;
   } catch {
     return fallback;
   }

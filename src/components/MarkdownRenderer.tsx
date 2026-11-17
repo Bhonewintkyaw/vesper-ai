@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Check, Copy, Download, ExternalLink } from 'lucide-react';
 
@@ -108,11 +108,19 @@ function CodeBlock({
   );
 }
 
+function safeMarkdownUrlTransform(url: string): string {
+  if (/^data:image\/(png|jpeg|jpg|webp|gif);base64,[a-zA-Z0-9+/=]+$/i.test(url.trim())) {
+    return url.trim();
+  }
+  return defaultUrlTransform(url);
+}
+
 export function MarkdownRenderer({ content }: { content: string }) {
   return (
     <div className="prose-chat">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        urlTransform={safeMarkdownUrlTransform}
         components={{
           pre({ children }) {
             return <>{children}</>;
