@@ -18,6 +18,7 @@ import { MarkdownRenderer } from './MarkdownRenderer';
 interface ChatMessageListProps {
   messages: ChatMessage[];
   isStreaming: boolean;
+  userName?: string | null;
   onSelectStarterPrompt: (prompt: string) => void;
   onRegenerateLast: () => void;
   onRestorePrompt?: (text: string) => void;
@@ -70,6 +71,7 @@ function formatModelLabel(model?: ChatModelId): string | null {
 export function ChatMessageList({
   messages,
   isStreaming,
+  userName,
   onSelectStarterPrompt,
   onRegenerateLast,
   onRestorePrompt,
@@ -168,7 +170,7 @@ export function ChatMessageList({
             className="font-display text-3xl font-bold tracking-[-0.03em] text-slate-950 sm:text-4xl dark:text-[#f8fafc]"
             style={{ textWrap: 'balance' }}
           >
-            Hey Kyle, how can I help?
+            {userName ? `Hey ${userName}, how can I help?` : 'Hey there, how can I help?'}
           </h1>
           <p className="mt-2.5 max-w-lg text-[15px] leading-relaxed text-slate-600 dark:text-[#94a3b8]">
             Ask a question, share a snippet, or just chat. I&apos;m ready whenever you are.

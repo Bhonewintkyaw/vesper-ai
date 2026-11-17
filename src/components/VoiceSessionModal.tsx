@@ -19,6 +19,7 @@ interface VoiceTurn {
 interface VoiceSessionModalProps {
   isOpen: boolean;
   adaptiveMode: AdaptiveMode;
+  userName?: string | null;
   onClose: () => void;
   onSaveTranscript?: (turns: VoiceTurn[]) => void;
 }
@@ -57,6 +58,7 @@ function pcmBase64ToFloat32(base64: string): Float32Array {
 export function VoiceSessionModal({
   isOpen,
   adaptiveMode,
+  userName,
   onClose,
   onSaveTranscript,
 }: VoiceSessionModalProps) {
@@ -231,9 +233,10 @@ export function VoiceSessionModal({
       outputCtxRef.current = outputCtx;
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const userParam = userName ? `&userName=${encodeURIComponent(userName)}` : '';
       const wsUrl = `${protocol}//${window.location.host}/api/live?mode=${encodeURIComponent(
         adaptiveMode
-      )}&voice=${encodeURIComponent(voice)}`;
+      )}&voice=${encodeURIComponent(voice)}${userParam}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -303,7 +306,7 @@ export function VoiceSessionModal({
       );
       setStatus('error');
     }
-  }, [adaptiveMode, appendTurnChunk, cleanupResources, scheduleAudioChunk, stopPlayback, voice]);
+  }, [adaptiveMode, appendTurnChunk, cleanupResources, scheduleAudioChunk, stopPlayback, userName, voice]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -459,7 +462,7 @@ export function VoiceSessionModal({
                 }`}
               >
                 <span className="mb-1 font-mono text-[10px] text-slate-400 dark:text-[#64748b]">
-                  {turn.role === 'user' ? 'Kyle' : 'Vesper'}
+                  {turn.role === 'user' ? userName || 'You' : 'Vesper'}
                 </span>
                 <div
                   className={`max-w-[85%] rounded-xl px-3 py-2 text-xs leading-relaxed ${

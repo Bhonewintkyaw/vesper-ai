@@ -392,6 +392,16 @@ export default function App() {
     [baseMessages]
   );
 
+  const userFirstName = useMemo(() => {
+    if (!user) return null;
+    const rawName = (user.displayName || '').trim();
+    if (rawName) {
+      return rawName.split(/\s+/)[0].slice(0, 40);
+    }
+    const emailPrefix = (user.email || '').split('@')[0]?.trim();
+    return emailPrefix ? emailPrefix.slice(0, 40) : null;
+  }, [user]);
+
   const handleSignIn = async () => {
     setAuthError(null);
     try {
@@ -645,6 +655,7 @@ export default function App() {
           useSearch: config.useSearch,
           useUrlContext: config.useUrlContext,
           adaptiveMode,
+          userName: userFirstName || undefined,
           activeModules: activeModules.map((m) => ({
             name: m.name,
             command: m.command,
@@ -1080,6 +1091,7 @@ export default function App() {
           <ChatMessageList
             messages={displayedMessages}
             isStreaming={isStreaming}
+            userName={userFirstName}
             onSelectStarterPrompt={(prompt) => void handleSend(prompt, [])}
             onRegenerateLast={() => void handleRegenerateLast()}
             onRestorePrompt={(text) => setPrefillText(text)}
@@ -1114,6 +1126,7 @@ export default function App() {
       <VoiceSessionModal
         isOpen={voiceOpen}
         adaptiveMode={adaptiveMode}
+        userName={userFirstName}
         onClose={() => setVoiceOpen(false)}
         onSaveTranscript={(turns) => void handleSaveVoiceTranscript(turns)}
       />

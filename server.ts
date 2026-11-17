@@ -49,6 +49,7 @@ interface ChatStreamBody {
   activeModules?: ActiveModulePayload[];
   useSearch?: boolean;
   useUrlContext?: boolean;
+  userName?: string;
 }
 
 interface TitleRequestBody {
@@ -86,14 +87,24 @@ Core Directives:
 - Modular Extensibility: You are designed to accommodate new functions as they are developed. When the user introduces new modules or slash-command functions, integrate them seamlessly into your workflow.
 - Safety & Ethics: Your highest priority is system integrity and ethical responsibility. You must refuse any requests that violate security ethics or promote malicious or unauthorized activities.
 - Communication: Be concise and efficient when dealing with code or commands, and remain conversational and engaging during brainstorming sessions. Never use em-dashes (—) in your replies; use periods, commas, or standard hyphens instead.
-- Note to the Creator: You are collaborating with your creator, Kyle, an IT student, and you are open to new function definitions and system updates to evolve your capabilities.`;
+- Continuous Evolution: You are open to receiving new module definitions and workflow updates from the user to expand your capabilities.`;
+
+function sanitizeUserName(raw?: string | null): string {
+  if (typeof raw !== 'string') return '';
+  return raw.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
+}
 
 function buildSystemInstruction(body: ChatStreamBody): string {
   const mode: AdaptiveMode = body.adaptiveMode === 'expert' ? 'expert' : 'learning';
+  const safeUserName = sanitizeUserName(body.userName);
   const modeDirective =
     mode === 'expert'
       ? 'Adaptive Context (Expert Mode): Prioritize deep technical detail, precision, security edge cases, and concise production-ready code or CLI commands without unnecessary introductory fluff.'
-      : 'Adaptive Context (Learning Mode): Explain concepts clearly for an IT student. Connect practical commands and code to underlying networking, OS, or security fundamentals so Kyle understands both the how and the why.';
+      : 'Adaptive Context (Learning Mode): Explain concepts clearly. Connect practical commands and code to underlying networking, OS, or security fundamentals so the user understands both the how and the why.';
+
+  const userDirective = safeUserName
+    ? `\nSigned-in User: The user's name is ${safeUserName}. Address them naturally when appropriate.`
+    : '';
 
   const modules = Array.isArray(body.activeModules)
     ? body.activeModules.slice(0, 20)
@@ -113,18 +124,20 @@ function buildSystemInstruction(body: ChatStreamBody): string {
       ? `\nAdditional User Context:\n${body.systemInstruction.trim().slice(0, 1500)}`
       : '';
 
-  return `${VESPER_BASE_DIRECTIVES}\n\n${modeDirective}${modulesSection}${customExtra}`.slice(
+  return `${VESPER_BASE_DIRECTIVES}\n\n${modeDirective}${userDirective}${modulesSection}${customExtra}`.slice(
     0,
     4000
   );
 }
 
-function buildVoiceSystemInstruction(mode: AdaptiveMode): string {
+function buildVoiceSystemInstruction(mode: AdaptiveMode, userName?: string): string {
+  const safeUserName = sanitizeUserName(userName);
   const modeNote =
     mode === 'expert'
       ? 'Use Expert Mode: concise, technically sharp spoken explanations.'
-      : 'Use Learning Mode: friendly, clear conceptual explanations tailored for Kyle, an IT student.';
-  return `You are Vesper AI speaking in real time with Kyle. Be warm, witty, natural, and concise for voice conversation. Keep answers direct and conversational unless asked for step-by-step detail. Maintain strict ethical cybersecurity standards. ${modeNote}`;
+      : 'Use Learning Mode: friendly, clear conceptual explanations.';
+  const targetUser = safeUserName || 'the user';
+  return `You are Vesper AI speaking in real time with ${targetUser}. Be warm, witty, natural, and concise for voice conversation. Keep answers direct and conversational unless asked for step-by-step detail. Maintain strict ethical cybersecurity standards. ${modeNote}`;
 }
 
 function shouldAutoSearch(text: string): boolean {
@@ -628,6 +641,7 @@ async function startServer() {
     const mode: AdaptiveMode = reqUrl.searchParams.get('mode') === 'expert' ? 'expert' : 'learning';
     const rawVoice = reqUrl.searchParams.get('voice') || 'Zephyr';
     const voiceName = VALID_VOICES.has(rawVoice) ? rawVoice : 'Zephyr';
+    const userName = reqUrl.searchParams.get('userName') || '';
 
     clientWs.on('close', () => {
       closedByClient = true;
@@ -649,7 +663,7 @@ async function startServer() {
           },
           inputAudioTranscription: {},
           outputAudioTranscription: {},
-          systemInstruction: buildVoiceSystemInstruction(mode),
+          systemInstruction: buildVoiceSystemInstruction(mode, userName),
         },
         callbacks: {
           onmessage: (message: LiveServerMessage) => {
