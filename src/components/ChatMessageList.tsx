@@ -27,23 +27,23 @@ interface ChatMessageListProps {
 const VESPER_STARTERS = [
   {
     title: 'Brainstorm an idea',
-    subtitle: 'Talk through a project, question, or problem together.',
-    prompt: 'Hey Vesper! Help me brainstorm a practical weekend project I can build and learn from.',
+    subtitle: 'Plan a project, trip, gift, or creative concept together.',
+    prompt: 'Hey Vesper! Help me brainstorm a practical weekend project or creative idea I can try.',
   },
   {
-    title: 'Help with code',
-    subtitle: 'Write, review, or fix a snippet in any language.',
-    prompt: 'Can you review a short code snippet for bugs or security issues and show me a cleaner way to write it?',
+    title: 'Write or polish text',
+    subtitle: 'Draft an email, rewrite a paragraph, or summarize notes.',
+    prompt: 'Can you help me write a clear, friendly message and give me a couple of tone options?',
   },
   {
     title: 'Explain a topic',
-    subtitle: 'Break down a tricky concept clearly and simply.',
-    prompt: 'Explain how HTTPS and TLS certificates keep a connection safe in plain, easy-to-follow terms.',
+    subtitle: 'Break down any subject clearly with simple examples.',
+    prompt: 'Explain a complex topic in plain, everyday terms with real-world examples.',
   },
   {
-    title: 'Quick command or tip',
-    subtitle: 'Find the right terminal command or workflow fast.',
-    prompt: 'What are the most useful Linux commands for checking network connections and open ports?',
+    title: 'Help with code or docs',
+    subtitle: 'Debug code, check errors, or analyze an uploaded file or image.',
+    prompt: 'Can you review a code snippet or help me understand an error step by step?',
   },
 ];
 

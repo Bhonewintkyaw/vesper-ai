@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
+  Loader2,
   Mic,
   MicOff,
   PhoneOff,
   Radio,
+  Square,
   Volume2,
   X,
 } from 'lucide-react';
@@ -55,6 +57,19 @@ function pcmBase64ToFloat32(base64: string): Float32Array {
   return float32;
 }
 
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      const comma = result.indexOf(',');
+      resolve(comma !== -1 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(new Error('Failed to encode recorded audio.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
 export function VoiceSessionModal({
   isOpen,
   adaptiveMode,
@@ -63,10 +78,13 @@ export function VoiceSessionModal({
   onSaveTranscript,
 }: VoiceSessionModalProps) {
   const [voice, setVoice] = useState<(typeof VOICES)[number]>('Zephyr');
+  const [transportMode, setTransportMode] = useState<'live' | 'turn'>('live');
   const [status, setStatus] = useState<'idle' | 'connecting' | 'live' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isMuted, setIsMuted] = useState(false);
   const [isModelSpeaking, setIsModelSpeaking] = useState(false);
+  const [isTurnRecording, setIsTurnRecording] = useState(false);
+  const [isTurnProcessing, setIsTurnProcessing] = useState(false);
   const [turns, setTurns] = useState<VoiceTurn[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -79,7 +97,15 @@ export function VoiceSessionModal({
   const nextStartTimeRef = useRef<number>(0);
   const isMutedRef = useRef<boolean>(false);
   const isLiveReadyRef = useRef<boolean>(false);
+  const transportModeRef = useRef<'live' | 'turn'>('live');
+  const voiceRef = useRef<(typeof VOICES)[number]>('Zephyr');
   const turnsRef = useRef<VoiceTurn[]>([]);
+
+  const turnRecorderRef = useRef<MediaRecorder | null>(null);
+  const turnChunksRef = useRef<BlobPart[]>([]);
+  const turnAudioRef = useRef<HTMLAudioElement | null>(null);
+  const turnAbortRef = useRef<AbortController | null>(null);
+  const closingSessionRef = useRef<boolean>(false);
 
   useEffect(() => {
     isMutedRef.current = isMuted;
@@ -88,6 +114,14 @@ export function VoiceSessionModal({
   useEffect(() => {
     turnsRef.current = turns;
   }, [turns]);
+
+  useEffect(() => {
+    voiceRef.current = voice;
+  }, [voice]);
+
+  useEffect(() => {
+    transportModeRef.current = transportMode;
+  }, [transportMode]);
 
   const stopPlayback = useCallback(() => {
     for (const src of activeSourcesRef.current) {
@@ -99,13 +133,21 @@ export function VoiceSessionModal({
     }
     activeSourcesRef.current.clear();
     nextStartTimeRef.current = 0;
+
+    if (turnAudioRef.current) {
+      try {
+        turnAudioRef.current.pause();
+        turnAudioRef.current.currentTime = 0;
+      } catch {
+        // ignore audio stop errors
+      }
+      turnAudioRef.current = null;
+    }
+
     setIsModelSpeaking(false);
   }, []);
 
-  const cleanupResources = useCallback(() => {
-    isLiveReadyRef.current = false;
-    stopPlayback();
-
+  const cleanupLiveAudioPipeline = useCallback(() => {
     if (processorRef.current) {
       processorRef.current.onaudioprocess = null;
       try {
@@ -123,11 +165,6 @@ export function VoiceSessionModal({
         // ignore
       }
       sourceNodeRef.current = null;
-    }
-
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
     }
 
     if (inputCtxRef.current) {
@@ -153,7 +190,37 @@ export function VoiceSessionModal({
       }
       wsRef.current = null;
     }
-  }, [stopPlayback]);
+  }, []);
+
+  const cleanupResources = useCallback(() => {
+    closingSessionRef.current = true;
+    isLiveReadyRef.current = false;
+    stopPlayback();
+
+    if (turnAbortRef.current) {
+      turnAbortRef.current.abort();
+      turnAbortRef.current = null;
+    }
+
+    if (turnRecorderRef.current && turnRecorderRef.current.state !== 'inactive') {
+      try {
+        turnRecorderRef.current.stop();
+      } catch {
+        // ignore
+      }
+    }
+    turnRecorderRef.current = null;
+    turnChunksRef.current = [];
+    setIsTurnRecording(false);
+    setIsTurnProcessing(false);
+
+    cleanupLiveAudioPipeline();
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+  }, [cleanupLiveAudioPipeline, stopPlayback]);
 
   const appendTurnChunk = useCallback((role: 'user' | 'model', chunk: string) => {
     const clean = chunk.replace(/—/g, '-');
@@ -174,6 +241,19 @@ export function VoiceSessionModal({
           text: clean.trim(),
         },
       ];
+    });
+  }, []);
+
+  const setModelTurnText = useCallback((turnId: string, fullText: string) => {
+    const clean = fullText.replace(/—/g, '-');
+    setTurns((prev) => {
+      const idx = prev.findIndex((t) => t.id === turnId);
+      if (idx === -1) {
+        return [...prev, { id: turnId, role: 'model', text: clean }];
+      }
+      const next = [...prev];
+      next[idx] = { ...next[idx], text: clean };
+      return next;
     });
   }, []);
 
@@ -208,9 +288,241 @@ export function VoiceSessionModal({
     src.start(startAt);
   }, []);
 
+  const switchToTurnFallback = useCallback(() => {
+    if (closingSessionRef.current) return;
+    cleanupLiveAudioPipeline();
+    isLiveReadyRef.current = false;
+    transportModeRef.current = 'turn';
+    setTransportMode('turn');
+    setErrorMsg(null);
+    setStatus('live');
+  }, [cleanupLiveAudioPipeline]);
+
+  const processVoiceTurnBlob = useCallback(
+    async (blob: Blob, mimeType: string) => {
+      if (closingSessionRef.current) return;
+      setIsTurnProcessing(true);
+      setErrorMsg(null);
+
+      const controller = new AbortController();
+      turnAbortRef.current = controller;
+
+      try {
+        const audioData = await blobToBase64(blob);
+        const transcribeRes = await fetch('/api/transcribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ audioData, mimeType }),
+          signal: controller.signal,
+        });
+        const transcribeJson = (await transcribeRes.json()) as {
+          transcript?: string;
+          error?: string;
+        };
+        if (!transcribeRes.ok) {
+          throw new Error(transcribeJson.error || 'Could not transcribe audio.');
+        }
+
+        const spokenText = (transcribeJson.transcript || '').trim();
+        if (!spokenText) {
+          setErrorMsg('No speech detected. Tap to speak and try again.');
+          return;
+        }
+
+        const userTurn: VoiceTurn = {
+          id: `u_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          role: 'user',
+          text: spokenText,
+        };
+        const updatedHistory = [...turnsRef.current, userTurn];
+        setTurns(updatedHistory);
+
+        const chatRes = await fetch('/api/chat/stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages: updatedHistory.slice(-12).map((t) => ({
+              role: t.role,
+              text: t.text,
+            })),
+            model: 'gemini-3.1-flash-lite',
+            thinkingLevel: 'MINIMAL',
+            adaptiveMode,
+            userName: userName || undefined,
+            systemInstruction:
+              'Keep spoken replies natural, warm, clear, and concise (2 to 4 short sentences unless asked for more detail).',
+          }),
+          signal: controller.signal,
+        });
+
+        if (!chatRes.ok || !chatRes.body) {
+          let errMsg = `Server returned status ${chatRes.status}`;
+          try {
+            const errJson = (await chatRes.json()) as { error?: string };
+            if (errJson.error) errMsg = errJson.error;
+          } catch {
+            // ignore
+          }
+          throw new Error(errMsg);
+        }
+
+        const modelTurnId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        const reader = chatRes.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let replyText = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          let boundary = buffer.indexOf('\n\n');
+          while (boundary !== -1) {
+            const rawEvent = buffer.slice(0, boundary).trim();
+            buffer = buffer.slice(boundary + 2);
+            boundary = buffer.indexOf('\n\n');
+            if (!rawEvent.startsWith('data:')) continue;
+            try {
+              const evt = JSON.parse(rawEvent.slice(5).trim()) as {
+                type?: string;
+                text?: string;
+                error?: string;
+              };
+              if (evt.type === 'chunk' && typeof evt.text === 'string') {
+                replyText += evt.text;
+                setModelTurnText(modelTurnId, replyText);
+              } else if (evt.type === 'error') {
+                throw new Error(evt.error || 'Voice reply failed.');
+              }
+            } catch (parseErr) {
+              if (parseErr instanceof Error && parseErr.message !== 'Unexpected end of JSON input') {
+                throw parseErr;
+              }
+            }
+          }
+        }
+
+        const cleanReply = replyText.replace(/—/g, '-').trim();
+        if (!cleanReply) {
+          throw new Error('Empty response received.');
+        }
+
+        const ttsRes = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: cleanReply, voice: voiceRef.current }),
+          signal: controller.signal,
+        });
+        const ttsJson = (await ttsRes.json()) as { audioDataUrl?: string; error?: string };
+        if (ttsRes.ok && ttsJson.audioDataUrl && !closingSessionRef.current) {
+          const audio = new Audio(ttsJson.audioDataUrl);
+          turnAudioRef.current = audio;
+          setIsModelSpeaking(true);
+          audio.onended = () => {
+            if (turnAudioRef.current === audio) {
+              turnAudioRef.current = null;
+            }
+            setIsModelSpeaking(false);
+          };
+          audio.onerror = () => {
+            if (turnAudioRef.current === audio) {
+              turnAudioRef.current = null;
+            }
+            setIsModelSpeaking(false);
+          };
+          await audio.play().catch(() => {
+            setIsModelSpeaking(false);
+          });
+        }
+      } catch (err) {
+        if ((err as { name?: string })?.name !== 'AbortError' && !closingSessionRef.current) {
+          setErrorMsg(err instanceof Error ? err.message : 'Voice turn failed.');
+        }
+      } finally {
+        if (turnAbortRef.current === controller) {
+          turnAbortRef.current = null;
+        }
+        setIsTurnProcessing(false);
+      }
+    },
+    [adaptiveMode, setModelTurnText, userName]
+  );
+
+  const toggleTurnRecording = useCallback(async () => {
+    if (isTurnProcessing) return;
+
+    if (isTurnRecording && turnRecorderRef.current) {
+      if (turnRecorderRef.current.state !== 'inactive') {
+        turnRecorderRef.current.stop();
+      }
+      setIsTurnRecording(false);
+      return;
+    }
+
+    stopPlayback();
+    setErrorMsg(null);
+
+    try {
+      let stream = streamRef.current;
+      if (!stream || stream.getAudioTracks().every((t) => t.readyState !== 'live')) {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+        streamRef.current = stream;
+      }
+
+      const preferredTypes = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4',
+        'audio/ogg',
+      ];
+      const supportedMime =
+        preferredTypes.find((t) => MediaRecorder.isTypeSupported(t)) || '';
+      const recorder = supportedMime
+        ? new MediaRecorder(stream, { mimeType: supportedMime })
+        : new MediaRecorder(stream);
+
+      turnChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          turnChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        const mimeType = recorder.mimeType || supportedMime || 'audio/webm';
+        const blob = new Blob(turnChunksRef.current, { type: mimeType });
+        turnChunksRef.current = [];
+        turnRecorderRef.current = null;
+        if (!closingSessionRef.current && blob.size > 0) {
+          void processVoiceTurnBlob(blob, mimeType);
+        }
+      };
+
+      turnRecorderRef.current = recorder;
+      recorder.start(200);
+      setIsTurnRecording(true);
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error
+          ? err.message
+          : 'Microphone access is required for voice conversations.'
+      );
+    }
+  }, [isTurnProcessing, isTurnRecording, processVoiceTurnBlob, stopPlayback]);
+
   const startSession = useCallback(async () => {
     cleanupResources();
+    closingSessionRef.current = false;
     setErrorMsg(null);
+    setTransportMode('live');
+    transportModeRef.current = 'live';
     setStatus('connecting');
     setIsMuted(false);
     isMutedRef.current = false;
@@ -223,6 +535,10 @@ export function VoiceSessionModal({
           autoGainControl: true,
         },
       });
+      if (closingSessionRef.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
       streamRef.current = stream;
 
       const inputCtx = new AudioContext({ sampleRate: 16000 });
@@ -236,9 +552,15 @@ export function VoiceSessionModal({
       const userParam = userName ? `&userName=${encodeURIComponent(userName)}` : '';
       const wsUrl = `${protocol}//${window.location.host}/api/live?mode=${encodeURIComponent(
         adaptiveMode
-      )}&voice=${encodeURIComponent(voice)}${userParam}`;
+      )}&voice=${encodeURIComponent(voiceRef.current)}${userParam}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
+
+      const connectTimeout = window.setTimeout(() => {
+        if (!isLiveReadyRef.current && !closingSessionRef.current && transportModeRef.current === 'live') {
+          switchToTurnFallback();
+        }
+      }, 4500);
 
       ws.onopen = () => {
         const source = inputCtx.createMediaStreamSource(stream);
@@ -266,9 +588,11 @@ export function VoiceSessionModal({
             error?: string;
           };
           if (msg.type === 'ready') {
+            window.clearTimeout(connectTimeout);
             isLiveReadyRef.current = true;
             setStatus('live');
           } else if (msg.type === 'audio' && msg.data) {
+            window.clearTimeout(connectTimeout);
             isLiveReadyRef.current = true;
             setStatus('live');
             scheduleAudioChunk(msg.data);
@@ -279,10 +603,20 @@ export function VoiceSessionModal({
           } else if (msg.type === 'interrupted') {
             stopPlayback();
           } else if (msg.type === 'error') {
-            setErrorMsg(msg.error || 'Voice session failed.');
-            setStatus('error');
+            window.clearTimeout(connectTimeout);
+            if (!isLiveReadyRef.current) {
+              switchToTurnFallback();
+            } else {
+              setErrorMsg(msg.error || 'Voice session failed.');
+              setStatus('error');
+            }
           } else if (msg.type === 'closed') {
-            setStatus((prev) => (prev === 'error' ? prev : 'idle'));
+            window.clearTimeout(connectTimeout);
+            if (!isLiveReadyRef.current && !closingSessionRef.current) {
+              switchToTurnFallback();
+            } else {
+              setStatus((prev) => (prev === 'error' ? prev : 'idle'));
+            }
           }
         } catch {
           // ignore malformed messages
@@ -290,12 +624,22 @@ export function VoiceSessionModal({
       };
 
       ws.onerror = () => {
-        setErrorMsg('Could not establish live voice connection.');
-        setStatus('error');
+        window.clearTimeout(connectTimeout);
+        if (!isLiveReadyRef.current && !closingSessionRef.current) {
+          switchToTurnFallback();
+        } else {
+          setErrorMsg('Could not establish live voice connection.');
+          setStatus('error');
+        }
       };
 
       ws.onclose = () => {
-        setStatus((prev) => (prev === 'error' ? prev : 'idle'));
+        window.clearTimeout(connectTimeout);
+        if (!isLiveReadyRef.current && !closingSessionRef.current) {
+          switchToTurnFallback();
+        } else if (transportModeRef.current === 'live') {
+          setStatus((prev) => (prev === 'error' ? prev : 'idle'));
+        }
       };
     } catch (err) {
       cleanupResources();
@@ -306,7 +650,15 @@ export function VoiceSessionModal({
       );
       setStatus('error');
     }
-  }, [adaptiveMode, appendTurnChunk, cleanupResources, scheduleAudioChunk, stopPlayback, userName, voice]);
+  }, [
+    adaptiveMode,
+    appendTurnChunk,
+    cleanupResources,
+    scheduleAudioChunk,
+    stopPlayback,
+    switchToTurnFallback,
+    userName,
+  ]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -333,12 +685,33 @@ export function VoiceSessionModal({
     onClose();
   };
 
+  const statusLabel =
+    status === 'connecting'
+      ? 'Connecting voice session...'
+      : status === 'error'
+      ? 'Connection error'
+      : transportMode === 'turn'
+      ? isTurnRecording
+        ? 'Listening... tap Stop when finished'
+        : isTurnProcessing
+        ? 'Thinking...'
+        : isModelSpeaking
+        ? 'Vesper is speaking'
+        : 'Voice Turn Mode (Tap mic to talk)'
+      : status === 'live'
+      ? isModelSpeaking
+        ? 'Vesper is speaking'
+        : isMuted
+        ? 'Mic muted'
+        : 'Listening live'
+      : 'Session ended';
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#090a0f]/80 p-4 backdrop-blur-md">
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="Live Voice Conversation"
+        aria-label="Voice Conversation"
         className="flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-[#1e2333] dark:border-t-white/10 dark:bg-[#181b26]/95 dark:shadow-[0_0_40px_-8px_rgba(139,92,246,0.35)] dark:backdrop-blur-2xl"
       >
         <div className="flex shrink-0 items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-[#1e2333]">
@@ -355,17 +728,7 @@ export function VoiceSessionModal({
                 Voice Conversation
               </h2>
               <p className="font-mono text-[11px] text-slate-500 dark:text-[#94a3b8]">
-                {status === 'connecting'
-                  ? 'Connecting to gemini-3.8-live...'
-                  : status === 'live'
-                  ? isModelSpeaking
-                    ? 'Vesper is speaking'
-                    : isMuted
-                    ? 'Mic muted'
-                    : 'Listening live'
-                  : status === 'error'
-                  ? 'Connection error'
-                  : 'Session ended'}
+                {statusLabel}
               </p>
             </div>
           </div>
@@ -386,29 +749,35 @@ export function VoiceSessionModal({
               status === 'live'
                 ? isModelSpeaking
                   ? 'border-[#06b6d4] bg-[#0f111a] shadow-[0_0_32px_rgba(6,182,212,0.4)]'
+                  : isTurnRecording
+                  ? 'border-red-500 bg-[#0f111a] shadow-[0_0_28px_rgba(239,68,68,0.4)]'
                   : 'border-[#8b5cf6]/70 bg-[#0f111a] shadow-[0_0_24px_rgba(139,92,246,0.3)]'
                 : 'border-slate-200 bg-slate-100 dark:border-[#1e2333] dark:bg-[#0f111a]'
             }`}
           >
-            {status === 'live' && (
+            {status === 'live' && (isModelSpeaking || isTurnRecording) && (
               <span
                 aria-hidden="true"
-                className={`absolute inset-0 rounded-full border ${
-                  isModelSpeaking
-                    ? 'animate-ping border-[#06b6d4]/40'
-                    : 'border-[#8b5cf6]/25'
+                className={`absolute inset-0 rounded-full border animate-ping ${
+                  isTurnRecording ? 'border-red-400/50' : 'border-[#06b6d4]/40'
                 }`}
               />
             )}
-            <Volume2
-              className={`h-8 w-8 ${
-                status === 'live'
-                  ? isModelSpeaking
-                    ? 'text-[#4cd7f6]'
-                    : 'text-[#d0bcff]'
-                  : 'text-slate-400 dark:text-[#64748b]'
-              }`}
-            />
+            {isTurnProcessing ? (
+              <Loader2 className="h-8 w-8 animate-spin text-[#4cd7f6]" />
+            ) : (
+              <Volume2
+                className={`h-8 w-8 ${
+                  status === 'live'
+                    ? isModelSpeaking
+                      ? 'text-[#4cd7f6]'
+                      : isTurnRecording
+                      ? 'text-red-400'
+                      : 'text-[#d0bcff]'
+                    : 'text-slate-400 dark:text-[#64748b]'
+                }`}
+              />
+            )}
           </div>
 
           <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5">
@@ -418,7 +787,8 @@ export function VoiceSessionModal({
                 type="button"
                 onClick={() => {
                   setVoice(v);
-                  if (status === 'live' || status === 'connecting') {
+                  voiceRef.current = v;
+                  if (transportModeRef.current === 'live' && (status === 'live' || status === 'connecting')) {
                     setTimeout(() => void startSession(), 0);
                   }
                 }}
@@ -451,7 +821,9 @@ export function VoiceSessionModal({
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
           {turns.length === 0 ? (
             <p className="py-6 text-center text-xs text-slate-500 dark:text-[#64748b]">
-              Start speaking naturally. Live transcripts will appear here.
+              {transportMode === 'turn'
+                ? 'Tap "Speak" below, ask anything naturally, then tap "Stop & Send" to hear Vesper reply.'
+                : 'Start speaking naturally. Live transcripts will appear here.'}
             </p>
           ) : (
             turns.map((turn) => (
@@ -479,19 +851,49 @@ export function VoiceSessionModal({
         </div>
 
         <div className="flex shrink-0 items-center justify-between gap-3 border-t border-slate-200 px-5 py-3.5 dark:border-[#1e2333]">
-          <button
-            type="button"
-            onClick={() => setIsMuted((prev) => !prev)}
-            disabled={status !== 'live'}
-            className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-medium transition-colors disabled:opacity-40 whitespace-nowrap shrink-0 ${
-              isMuted
-                ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-[#ca801e]/60 dark:bg-[#ca801e]/20 dark:text-[#ffb869]'
-                : 'border-slate-200 bg-slate-100 text-slate-800 hover:bg-slate-200 dark:border-[#1e2333] dark:bg-[#0f111a] dark:text-[#e3e1e9] dark:hover:bg-[#1e2333]'
-            }`}
-          >
-            {isMuted ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
-            <span>{isMuted ? 'Unmute' : 'Mute mic'}</span>
-          </button>
+          {transportMode === 'turn' ? (
+            <button
+              type="button"
+              onClick={() => void toggleTurnRecording()}
+              disabled={status !== 'live' || isTurnProcessing}
+              className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-medium transition-colors disabled:opacity-40 whitespace-nowrap shrink-0 ${
+                isTurnRecording
+                  ? 'bg-red-600 text-white hover:bg-red-700'
+                  : 'border-t border-white/25 bg-gradient-to-r from-[#8b5cf6] to-[#7c3aed] text-white shadow-[0_0_16px_rgba(139,92,246,0.35)] hover:opacity-95'
+              }`}
+            >
+              {isTurnRecording ? (
+                <>
+                  <Square className="h-3 w-3 fill-current" />
+                  <span>Stop &amp; Send</span>
+                </>
+              ) : isTurnProcessing ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <span>Replying...</span>
+                </>
+              ) : (
+                <>
+                  <Mic className="h-3.5 w-3.5" />
+                  <span>Tap to Speak</span>
+                </>
+              )}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setIsMuted((prev) => !prev)}
+              disabled={status !== 'live'}
+              className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-medium transition-colors disabled:opacity-40 whitespace-nowrap shrink-0 ${
+                isMuted
+                  ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-[#ca801e]/60 dark:bg-[#ca801e]/20 dark:text-[#ffb869]'
+                  : 'border-slate-200 bg-slate-100 text-slate-800 hover:bg-slate-200 dark:border-[#1e2333] dark:bg-[#0f111a] dark:text-[#e3e1e9] dark:hover:bg-[#1e2333]'
+              }`}
+            >
+              {isMuted ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
+              <span>{isMuted ? 'Unmute' : 'Mute mic'}</span>
+            </button>
+          )}
 
           <button
             type="button"

@@ -293,7 +293,7 @@ export function ModulesModal({
 
           <div>
             <h3 className="mb-2.5 font-mono text-[11px] font-medium tracking-[0.06em] text-slate-600 dark:text-[#958ea0]">
-              Built-in Security &amp; IT Modules
+              Built-in Assistant Modules
             </h3>
             <div className="space-y-2">
               {builtInModules.map((mod) => renderModuleCard(mod, false))}

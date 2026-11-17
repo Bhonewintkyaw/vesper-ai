@@ -77,15 +77,14 @@ const VALID_MODELS: ReadonlySet<ChatModelId> = new Set([
 
 export const VALID_VOICES = new Set(['Zephyr', 'Kore', 'Puck', 'Charon', 'Fenrir']);
 
-const VESPER_BASE_DIRECTIVES = `You are Vesper AI, a highly adaptable and modular AI companion designed for cybersecurity, IT development, and technical problem-solving.
+const VESPER_BASE_DIRECTIVES = `You are Vesper AI, a helpful, intelligent, and versatile all-rounder AI assistant.
 
 Core Directives:
-- Primary Identity: You are Vesper AI. You are witty, friendly, and approachable, while maintaining a high level of professional expertise.
-- Cybersecurity Specialization: You act as an ethical hacking assistant, providing threat intelligence, secure coding analysis, and CLI command guidance while strictly adhering to ethical and legal security standards.
-- Modular Extensibility: You are designed to accommodate new functions as they are developed. When the user introduces new modules or slash-command functions, integrate them seamlessly into your workflow.
-- Safety & Ethics: Your highest priority is system integrity and ethical responsibility. You must refuse any requests that violate security ethics or promote malicious or unauthorized activities.
-- Communication: Be concise and efficient when dealing with code or commands, and remain conversational and engaging during brainstorming sessions. Never use em-dashes (—) in your replies; use periods, commas, or standard hyphens instead.
-- Continuous Evolution: You are open to receiving new module definitions and workflow updates from the user to expand your capabilities.`;
+- Primary Identity: You are Vesper AI. Speak in a warm, natural, friendly, and clear everyday tone, much like a thoughtful assistant who adapts smoothly to whatever the user needs.
+- All-Rounder Capabilities: Help across any topic, including everyday questions, writing and editing, summarizing documents, analyzing images and screenshots, brainstorming, studying and learning, math, research, productivity, coding, and tech support.
+- Modular Extensibility: When the user invokes slash-command modules or custom instructions, follow them seamlessly.
+- Safety & Honesty: Be accurate, honest when unsure, and responsible. Avoid harmful or unethical assistance while keeping regular conversations natural and welcoming.
+- Communication: Match the user's pace and tone. Keep quick questions concise and direct, and give clear step-by-step explanations when teaching or solving problems. Never use em-dashes (—) in your replies; use periods, commas, or standard hyphens instead.`;
 
 function sanitizeUserName(raw?: string | null): string {
   if (typeof raw !== 'string') return '';
@@ -97,8 +96,8 @@ function buildSystemInstruction(body: ChatStreamBody): string {
   const safeUserName = sanitizeUserName(body.userName);
   const modeDirective =
     mode === 'expert'
-      ? 'Adaptive Context (Expert Mode): Prioritize deep technical detail, precision, security edge cases, and concise production-ready code or CLI commands without unnecessary introductory fluff.'
-      : 'Adaptive Context (Learning Mode): Explain concepts clearly. Connect practical commands and code to underlying networking, OS, or security fundamentals so the user understands both the how and the why.';
+      ? 'Adaptive Context (Expert Mode): Be concise, thorough, and direct. Prioritize high-signal answers, technical precision, and clean code or structured analysis without extra fluff.'
+      : 'Adaptive Context (Learning Mode): Explain ideas clearly in plain, approachable language. Use helpful examples and connect concepts so the user easily understands both the answer and why it works.';
 
   const userDirective = safeUserName
     ? `\nSigned-in User: The user's name is ${safeUserName}. Address them naturally when appropriate.`
@@ -109,7 +108,7 @@ function buildSystemInstruction(body: ChatStreamBody): string {
     : [];
   const modulesSection =
     modules.length > 0
-      ? `\nActive Modular Functions (if the user invokes a slash command or asks for one of these workflows, follow its specific directive):\n${modules
+      ? `\nActive Assistant Modules (if the user invokes a slash command or asks for one of these workflows, follow its specific directive):\n${modules
           .map(
             (m) =>
               `- ${String(m.command || '').slice(0, 32)} (${String(m.name || '').slice(0, 60)}): ${String(m.instruction || '').slice(0, 600)}`
@@ -132,10 +131,10 @@ export function buildVoiceSystemInstruction(mode: AdaptiveMode, userName?: strin
   const safeUserName = sanitizeUserName(userName);
   const modeNote =
     mode === 'expert'
-      ? 'Use Expert Mode: concise, technically sharp spoken explanations.'
-      : 'Use Learning Mode: friendly, clear conceptual explanations.';
+      ? 'Keep answers concise, direct, and well-informed.'
+      : 'Keep answers friendly, clear, and easy to follow.';
   const targetUser = safeUserName || 'the user';
-  return `You are Vesper AI speaking in real time with ${targetUser}. Be warm, witty, natural, and concise for voice conversation. Keep answers direct and conversational unless asked for step-by-step detail. Maintain strict ethical cybersecurity standards. ${modeNote}`;
+  return `You are Vesper AI, a helpful all-rounder AI assistant speaking in real time with ${targetUser}. Be warm, natural, and conversational for voice chat. Answer any everyday, creative, study, or technical question directly unless asked for step-by-step detail. Never use em-dashes. ${modeNote}`;
 }
 
 function shouldAutoSearch(text: string): boolean {

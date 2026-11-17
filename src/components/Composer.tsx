@@ -1,16 +1,23 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUp,
+  Check,
   CornerDownLeft,
+  Download,
   FileText,
+  FlipHorizontal2,
   Globe,
   History,
+  Image as ImageIcon,
   Link2,
   Loader2,
   Mic,
   Paperclip,
   Radio,
+  RotateCcw,
+  RotateCw,
   Search,
+  SlidersHorizontal,
   Sparkles,
   Square,
   Trash2,
@@ -22,6 +29,12 @@ import type {
   FreeModelPreset,
   VesperModule,
 } from '../types/chat';
+import {
+  processImageAttachment,
+  type ImageFilterMode,
+  type ImageProcessOptions,
+  type ProcessedImageResult,
+} from '../lib/imageProcessor';
 
 export interface ComposerSendOptions {
   mode: ComposerMode;
@@ -139,11 +152,24 @@ export function Composer({
   const [historyQuery, setHistoryQuery] = useState('');
   const [historySelectedIdx, setHistorySelectedIdx] = useState(0);
 
+  const [editingImageId, setEditingImageId] = useState<string | null>(null);
+  const [editOptions, setEditOptions] = useState<ImageProcessOptions>({
+    rotateDeg: 0,
+    flipH: false,
+    filter: 'none',
+    maxDimension: 0,
+    outputMime: 'image/jpeg',
+    quality: 0.88,
+  });
+  const [editPreview, setEditPreview] = useState<ProcessedImageResult | null>(null);
+  const [isApplyingImageEdit, setIsApplyingImageEdit] = useState(false);
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const historySearchInputRef = useRef<HTMLInputElement>(null);
   const draftRef = useRef<string>('');
   const clearedHistoryRef = useRef<boolean>(false);
+  const originalSnapshotsRef = useRef<Map<string, { data: string; mimeType: string; size: number }>>(new Map());
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recordStreamRef = useRef<MediaStream | null>(null);
   const recordChunksRef = useRef<BlobPart[]>([]);
@@ -299,6 +325,11 @@ export function Composer({
   };
 
   const removeAttachment = (id: string) => {
+    if (editingImageId === id) {
+      setEditingImageId(null);
+      setEditPreview(null);
+    }
+    originalSnapshotsRef.current.delete(id);
     setAttachments((prev) => {
       const target = prev.find((a) => a.id === id);
       if (target?.previewUrl && target.previewUrl.startsWith('blob:')) {
@@ -306,6 +337,129 @@ export function Composer({
       }
       return prev.filter((a) => a.id !== id);
     });
+  };
+
+  const editingAttachment = useMemo(
+    () => attachments.find((a) => a.id === editingImageId) ?? null,
+    [attachments, editingImageId]
+  );
+
+  const hasImageAttachment = useMemo(
+    () => attachments.some((a) => a.mimeType.startsWith('image/')),
+    [attachments]
+  );
+
+  const openImageEditor = (att: AttachmentItem) => {
+    if (!originalSnapshotsRef.current.has(att.id)) {
+      originalSnapshotsRef.current.set(att.id, {
+        data: att.data,
+        mimeType: att.mimeType,
+        size: att.size,
+      });
+    }
+    const defaultMime: ImageProcessOptions['outputMime'] =
+      att.mimeType === 'image/png'
+        ? 'image/png'
+        : att.mimeType === 'image/webp'
+        ? 'image/webp'
+        : 'image/jpeg';
+    setEditingImageId(att.id);
+    setEditOptions({
+      rotateDeg: 0,
+      flipH: false,
+      filter: 'none',
+      maxDimension: 0,
+      outputMime: defaultMime,
+      quality: 0.88,
+    });
+  };
+
+  useEffect(() => {
+    if (!editingImageId) {
+      setEditPreview(null);
+      return;
+    }
+    const snap = originalSnapshotsRef.current.get(editingImageId);
+    const current = attachments.find((a) => a.id === editingImageId);
+    const sourceData = snap?.data ?? current?.data;
+    const sourceMime = snap?.mimeType ?? current?.mimeType;
+    if (!sourceData || !sourceMime) return;
+
+    let cancelled = false;
+    setIsApplyingImageEdit(true);
+    void processImageAttachment(sourceData, sourceMime, editOptions)
+      .then((res) => {
+        if (!cancelled) setEditPreview(res);
+      })
+      .catch(() => {
+        if (!cancelled) setEditPreview(null);
+      })
+      .finally(() => {
+        if (!cancelled) setIsApplyingImageEdit(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [editingImageId, editOptions, attachments]);
+
+  const applyImageEdits = () => {
+    if (!editingImageId || !editPreview) return;
+    setAttachments((prev) =>
+      prev.map((a) => {
+        if (a.id !== editingImageId) return a;
+        if (a.previewUrl && a.previewUrl.startsWith('blob:')) {
+          URL.revokeObjectURL(a.previewUrl);
+        }
+        return {
+          ...a,
+          data: editPreview.base64,
+          mimeType: editPreview.mimeType,
+          size: editPreview.sizeBytes,
+          previewUrl: editPreview.dataUrl,
+        };
+      })
+    );
+    setEditingImageId(null);
+    setEditPreview(null);
+  };
+
+  const resetImageEdits = () => {
+    if (!editingImageId) return;
+    const snap = originalSnapshotsRef.current.get(editingImageId);
+    if (!snap) return;
+    const defaultMime: ImageProcessOptions['outputMime'] =
+      snap.mimeType === 'image/png'
+        ? 'image/png'
+        : snap.mimeType === 'image/webp'
+        ? 'image/webp'
+        : 'image/jpeg';
+    setEditOptions({
+      rotateDeg: 0,
+      flipH: false,
+      filter: 'none',
+      maxDimension: 0,
+      outputMime: defaultMime,
+      quality: 0.88,
+    });
+  };
+
+  const downloadImageData = (name: string, mimeType: string, base64: string) => {
+    const ext = mimeType === 'image/png' ? 'png' : mimeType === 'image/webp' ? 'webp' : 'jpg';
+    const baseName = name.replace(/\.[^.]+$/, '') || 'image';
+    const link = document.createElement('a');
+    link.href = `data:${mimeType};base64,${base64}`;
+    link.download = `${baseName}-processed.${ext}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  };
+
+  const applyVisionQuickPrompt = (promptText: string) => {
+    setInput(promptText);
+    draftRef.current = promptText;
+    setHistoryIndex(-1);
+    focusTextareaAtEnd(promptText.length);
   };
 
   const stopRecordingStream = () => {
@@ -456,6 +610,9 @@ export function Composer({
     setHistoryQuery('');
     draftRef.current = '';
     setAttachments([]);
+    setEditingImageId(null);
+    setEditPreview(null);
+    originalSnapshotsRef.current.clear();
     setAttachError(null);
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -730,41 +887,265 @@ export function Composer({
             </div>
           </div>
 
-          {attachments.length > 0 && (
-            <div className="flex flex-wrap gap-2 border-b border-slate-200/80 px-3.5 pt-3 pb-2.5 dark:border-[#1e2333]">
-              {attachments.map((att) => (
-                <div
-                  key={att.id}
-                  className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs dark:border-[#1e2333] dark:bg-[#181b26]"
-                >
-                  {att.previewUrl ? (
-                    <img
-                      src={att.previewUrl}
-                      alt={att.name}
-                      referrerPolicy="no-referrer"
-                      className="h-7 w-7 rounded object-cover"
-                    />
-                  ) : (
-                    <FileText className="h-4 w-4 shrink-0 text-slate-400 dark:text-[#4cd7f6]" />
+          {editingAttachment && (
+            <div className="border-b border-slate-200/80 bg-white/95 px-3.5 py-3 dark:border-[#1e2333] dark:bg-[#121520]">
+              <div className="mb-2.5 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <ImageIcon className="h-3.5 w-3.5 text-[#8b5cf6] dark:text-[#4cd7f6]" />
+                  <span className="text-xs font-semibold text-slate-900 dark:text-[#f8fafc]">
+                    Free Image Processor
+                  </span>
+                  {editPreview && (
+                    <span className="font-mono text-[10px] text-slate-500 tabular-nums dark:text-[#94a3b8]">
+                      {editPreview.width}x{editPreview.height} · {formatBytes(editPreview.sizeBytes)}
+                    </span>
                   )}
-                  <div className="min-w-0 max-w-[140px]">
-                    <div className="truncate font-medium text-slate-800 dark:text-[#e3e1e9]">
-                      {att.name}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingImageId(null);
+                    setEditPreview(null);
+                  }}
+                  aria-label="Close image processor"
+                  className="rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700 dark:text-[#94a3b8] dark:hover:bg-[#292a2f] dark:hover:text-[#f8fafc]"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-100 dark:border-[#1e2333] dark:bg-[#090a0f]">
+                  {isApplyingImageEdit && !editPreview ? (
+                    <Loader2 className="h-5 w-5 animate-spin text-[#8b5cf6]" />
+                  ) : (
+                    <img
+                      src={editPreview?.dataUrl || editingAttachment.previewUrl}
+                      alt={editingAttachment.name}
+                      className="max-h-full max-w-full object-contain"
+                    />
+                  )}
+                </div>
+
+                <div className="flex flex-1 flex-col gap-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEditOptions((prev) => ({
+                          ...prev,
+                          rotateDeg: ((prev.rotateDeg + 90) % 360) as 0 | 90 | 180 | 270,
+                        }))
+                      }
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 dark:border-[#1e2333] dark:bg-[#181b26] dark:text-[#cbd3e1] dark:hover:bg-[#222636]"
+                    >
+                      <RotateCw className="h-3 w-3" />
+                      <span>Rotate 90°</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEditOptions((prev) => ({ ...prev, flipH: !prev.flipH }))
+                      }
+                      className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                        editOptions.flipH
+                          ? 'border-[#8b5cf6] bg-[#8b5cf6]/10 text-[#7c3aed] dark:text-[#d0bcff]'
+                          : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 dark:border-[#1e2333] dark:bg-[#181b26] dark:text-[#cbd3e1] dark:hover:bg-[#222636]'
+                      }`}
+                    >
+                      <FlipHorizontal2 className="h-3 w-3" />
+                      <span>Flip</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={resetImageEdits}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-100 dark:border-[#1e2333] dark:bg-[#181b26] dark:text-[#94a3b8] dark:hover:bg-[#222636]"
+                    >
+                      <RotateCcw className="h-3 w-3" />
+                      <span>Reset</span>
+                    </button>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {(
+                      [
+                        { id: 'none', label: 'Original' },
+                        { id: 'grayscale', label: 'Grayscale' },
+                        { id: 'high-contrast', label: 'OCR Contrast' },
+                        { id: 'invert', label: 'Invert' },
+                      ] as Array<{ id: ImageFilterMode; label: string }>
+                    ).map((f) => (
+                      <button
+                        key={f.id}
+                        type="button"
+                        onClick={() => setEditOptions((prev) => ({ ...prev, filter: f.id }))}
+                        className={`rounded-lg border px-2 py-1 text-[11px] font-medium transition-colors ${
+                          editOptions.filter === f.id
+                            ? 'border-[#8b5cf6] bg-[#8b5cf6] text-white'
+                            : 'border-slate-200 bg-white text-slate-600 hover:text-slate-900 dark:border-[#1e2333] dark:bg-[#0f111a] dark:text-[#94a3b8] dark:hover:text-[#f8fafc]'
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {(
+                        [
+                          { dim: 0, label: 'Full Size' },
+                          { dim: 1280, label: '1280px' },
+                          { dim: 800, label: '800px (Fast)' },
+                        ] as Array<{ dim: 0 | 1280 | 800; label: string }>
+                      ).map((r) => (
+                        <button
+                          key={r.dim}
+                          type="button"
+                          onClick={() =>
+                            setEditOptions((prev) => ({ ...prev, maxDimension: r.dim }))
+                          }
+                          className={`rounded-lg border px-2 py-1 font-mono text-[10px] font-medium transition-colors ${
+                            editOptions.maxDimension === r.dim
+                              ? 'border-[#06b6d4] bg-[#06b6d4]/15 text-[#0891b2] dark:text-[#4cd7f6]'
+                              : 'border-slate-200 bg-white text-slate-500 dark:border-[#1e2333] dark:bg-[#0f111a] dark:text-[#94a3b8]'
+                          }`}
+                        >
+                          {r.label}
+                        </button>
+                      ))}
                     </div>
-                    <div className="font-mono text-[10px] text-slate-400 tabular-nums dark:text-[#64748b]">
-                      {formatBytes(att.size)}
+
+                    <div className="flex items-center gap-1.5">
+                      {editPreview && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            downloadImageData(
+                              editingAttachment.name,
+                              editPreview.mimeType,
+                              editPreview.base64
+                            )
+                          }
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 dark:border-[#1e2333] dark:bg-[#181b26] dark:text-[#cbd3e1] dark:hover:bg-[#222636]"
+                        >
+                          <Download className="h-3 w-3" />
+                          <span>Save</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={!editPreview || isApplyingImageEdit}
+                        onClick={applyImageEdits}
+                        className="inline-flex items-center gap-1 rounded-lg bg-[#8b5cf6] px-2.5 py-1 text-[11px] font-medium text-white hover:bg-[#7c3aed] disabled:opacity-50"
+                      >
+                        <Check className="h-3 w-3" />
+                        <span>Apply</span>
+                      </button>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => removeAttachment(att.id)}
-                    aria-label={`Remove ${att.name}`}
-                    className="rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700 dark:text-[#94a3b8] dark:hover:bg-[#292a2f] dark:hover:text-[#f8fafc]"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
                 </div>
-              ))}
+              </div>
+            </div>
+          )}
+
+          {attachments.length > 0 && (
+            <div className="space-y-2 border-b border-slate-200/80 px-3.5 pt-3 pb-2.5 dark:border-[#1e2333]">
+              <div className="flex flex-wrap gap-2">
+                {attachments.map((att) => {
+                  const isImage = att.mimeType.startsWith('image/');
+                  return (
+                    <div
+                      key={att.id}
+                      className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs dark:border-[#1e2333] dark:bg-[#181b26]"
+                    >
+                      {att.previewUrl ? (
+                        <img
+                          src={att.previewUrl}
+                          alt={att.name}
+                          referrerPolicy="no-referrer"
+                          className="h-7 w-7 rounded object-cover"
+                        />
+                      ) : (
+                        <FileText className="h-4 w-4 shrink-0 text-slate-400 dark:text-[#4cd7f6]" />
+                      )}
+                      <div className="min-w-0 max-w-[130px]">
+                        <div className="truncate font-medium text-slate-800 dark:text-[#e3e1e9]">
+                          {att.name}
+                        </div>
+                        <div className="font-mono text-[10px] text-slate-400 tabular-nums dark:text-[#64748b]">
+                          {formatBytes(att.size)}
+                        </div>
+                      </div>
+                      {isImage && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => openImageEditor(att)}
+                            title="Process image (rotate, filter, resize)"
+                            aria-label={`Process ${att.name}`}
+                            className="rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-[#7c3aed] dark:text-[#94a3b8] dark:hover:bg-[#292a2f] dark:hover:text-[#4cd7f6]"
+                          >
+                            <SlidersHorizontal className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => downloadImageData(att.name, att.mimeType, att.data)}
+                            title="Download image"
+                            aria-label={`Download ${att.name}`}
+                            className="rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700 dark:text-[#94a3b8] dark:hover:bg-[#292a2f] dark:hover:text-[#f8fafc]"
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                          </button>
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removeAttachment(att.id)}
+                        aria-label={`Remove ${att.name}`}
+                        className="rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700 dark:text-[#94a3b8] dark:hover:bg-[#292a2f] dark:hover:text-[#f8fafc]"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {hasImageAttachment && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-mono text-[10px] text-slate-400 dark:text-[#64748b]">
+                    Free Vision:
+                  </span>
+                  {[
+                    {
+                      label: 'Extract text (OCR)',
+                      prompt: 'Extract all text from this image accurately and cleanly.',
+                    },
+                    {
+                      label: 'Describe image',
+                      prompt: 'Describe what is shown in this image clearly and concisely.',
+                    },
+                    {
+                      label: 'Explain / solve',
+                      prompt: 'Explain what is in this image and solve or answer anything shown step by step.',
+                    },
+                    {
+                      label: 'Translate text',
+                      prompt: 'Read the text in this image and translate it into English.',
+                    },
+                  ].map((action) => (
+                    <button
+                      key={action.label}
+                      type="button"
+                      onClick={() => applyVisionQuickPrompt(action.prompt)}
+                      className="rounded-lg border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600 transition-colors hover:border-[#8b5cf6]/50 hover:text-[#7c3aed] dark:border-[#1e2333] dark:bg-[#0f111a] dark:text-[#94a3b8] dark:hover:border-[#8b5cf6]/60 dark:hover:text-[#d0bcff]"
+                    >
+                      {action.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
