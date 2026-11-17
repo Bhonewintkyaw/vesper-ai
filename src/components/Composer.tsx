@@ -885,7 +885,7 @@ export function Composer({
               </button>
               {mode === 'image' ? (
                 <span className="rounded-lg border border-cyan-200 bg-cyan-50 px-2.5 py-1 font-mono text-[11px] font-medium text-cyan-800 dark:border-[#06b6d4]/40 dark:bg-[#06b6d4]/10 dark:text-[#4cd7f6]">
-                  Flux Free (Image)
+                  AI Horde Free (Image)
                 </span>
               ) : (
                 <>

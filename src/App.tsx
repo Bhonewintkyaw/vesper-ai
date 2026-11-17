@@ -35,6 +35,7 @@ import {
   updateThreadTitle,
 } from './lib/firestoreChat';
 import { BUILT_IN_MODULES } from './lib/modules';
+import { compressImageDataUrlForFirestore } from './lib/imageProcessor';
 import type {
   AdaptiveMode,
   AttachmentItem,
@@ -846,7 +847,7 @@ export default function App() {
       id: assistantMsgId,
       threadId: threadSnapshot.id,
       role: 'model',
-      text: 'Generating free image with Flux...',
+      text: 'Generating free image...',
       model: 'flux-free',
       createdAtMs: Date.now(),
       isStreaming: true,
@@ -868,10 +869,14 @@ export default function App() {
       });
 
       const rawText = (await res.text()).trim();
-      let parsed: { imageUrl?: string; error?: string } = {};
+      let parsed: { imageUrl?: string; generatedBy?: string; error?: string } = {};
       if (rawText) {
         try {
-          parsed = JSON.parse(rawText) as { imageUrl?: string; error?: string };
+          parsed = JSON.parse(rawText) as {
+            imageUrl?: string;
+            generatedBy?: string;
+            error?: string;
+          };
         } catch {
           // ignore non-JSON body
         }
@@ -881,8 +886,14 @@ export default function App() {
         throw new Error(parsed.error || `Image generator returned status ${res.status}`);
       }
 
-      const safeAlt = promptText.replace(/[\[\]\r\n]/g, ' ').trim().slice(0, 140) || 'Generated image';
-      generatedMarkdown = `![${safeAlt}](${parsed.imageUrl})\n\nGenerated with **Flux Free** for: *${safeAlt}*`;
+      const storableImageUrl = parsed.imageUrl.startsWith('data:image/')
+        ? await compressImageDataUrlForFirestore(parsed.imageUrl, 44000)
+        : parsed.imageUrl;
+
+      const safeAlt =
+        promptText.replace(/[\[\]\r\n]/g, ' ').trim().slice(0, 140) || 'Generated image';
+      const engineLabel = (parsed.generatedBy || 'AI Horde Free').replace(/[*_`]/g, '');
+      generatedMarkdown = `![${safeAlt}](${storableImageUrl})\n\nGenerated free with **${engineLabel}** for: *${safeAlt}*`;
     } catch (err) {
       if ((err as { name?: string })?.name === 'AbortError') {
         wasAborted = true;

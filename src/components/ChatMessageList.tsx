@@ -64,7 +64,7 @@ function formatModelLabel(model?: ChatModelId): string | null {
     case 'gemini-3.8-live':
       return 'Live Voice';
     case 'flux-free':
-      return 'Flux Free Image';
+      return 'AI Horde Free';
     default:
       return null;
   }

@@ -771,6 +771,81 @@ interface ImageGenerateRequestBody {
   seed?: number;
 }
 
+interface AiHordeModelInfo {
+  name?: string;
+  count?: number;
+  eta?: number;
+  type?: string;
+}
+
+const AI_HORDE_BASE = 'https://aihorde.net/api/v2';
+const AI_HORDE_CLIENT_AGENT = 'VesperAI:1.0:vesper';
+const AI_HORDE_PREFERRED_MODELS = [
+  'Deliberate',
+  "ICBINP - I Can't Believe It's Not Photography",
+  'DreamShaper',
+  'Realistic Vision',
+  'AlbedoBase XL (SDXL)',
+  'Juggernaut XL',
+  'stable_diffusion',
+];
+
+async function fetchJsonWithTimeout<T>(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<{ ok: boolean; status: number; data: T | null; rawText: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...init, signal: controller.signal });
+    const rawText = await res.text();
+    let data: T | null = null;
+    try {
+      data = rawText ? (JSON.parse(rawText) as T) : null;
+    } catch {
+      data = null;
+    }
+    return { ok: res.ok, status: res.status, data, rawText };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function pickFastOnlineHordeModels(): Promise<string[]> {
+  const fallback = ['Deliberate', "ICBINP - I Can't Believe It's Not Photography", 'stable_diffusion'];
+  try {
+    const res = await fetchJsonWithTimeout<AiHordeModelInfo[]>(
+      `${AI_HORDE_BASE}/status/models?type=image`,
+      {
+        method: 'GET',
+        headers: {
+          'Client-Agent': AI_HORDE_CLIENT_AGENT,
+        },
+      },
+      3000
+    );
+    if (!res.ok || !Array.isArray(res.data)) {
+      return fallback;
+    }
+
+    const byName = new Map<string, AiHordeModelInfo>();
+    for (const item of res.data) {
+      if (item?.name && (item.count ?? 0) > 0) {
+        byName.set(item.name, item);
+      }
+    }
+
+    const available = AI_HORDE_PREFERRED_MODELS.filter((name) => byName.has(name)).sort(
+      (a, b) => (byName.get(a)?.eta ?? 999) - (byName.get(b)?.eta ?? 999)
+    );
+
+    return available.length > 0 ? available.slice(0, 4) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export async function handleImageGenerate(req: ApiRequest, res: ApiResponse) {
   if (req.method !== 'POST') {
     sendJson(res, 405, { error: 'Method not allowed.' });
@@ -786,65 +861,156 @@ export async function handleImageGenerate(req: ApiRequest, res: ApiResponse) {
     return;
   }
 
-  const width =
-    typeof body.width === 'number' && body.width >= 256 && body.width <= 1024
-      ? Math.round(body.width)
-      : 768;
-  const height =
-    typeof body.height === 'number' && body.height >= 256 && body.height <= 1024
-      ? Math.round(body.height)
-      : 768;
   const seed =
     typeof body.seed === 'number' && Number.isFinite(body.seed)
       ? Math.abs(Math.floor(body.seed))
       : Math.floor(Math.random() * 1_000_000_000);
 
-  const modelsToTry = ['flux', 'turbo'] as const;
-  let lastStatus = 502;
-  let lastError = 'Image generator did not return an image.';
+  let clientClosed = false;
+  req.on('close', () => {
+    if (!res.writableFinished) {
+      clientClosed = true;
+    }
+  });
 
-  for (const modelVariant of modelsToTry) {
-    const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(
-      prompt
-    )}?width=${width}&height=${height}&model=${modelVariant}&seed=${seed}&nologo=true`;
+  try {
+    const hordeApiKey = process.env.AI_HORDE_API_KEY || '0000000000';
+    const selectedModels = await pickFastOnlineHordeModels();
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 35000);
-
-    try {
-      const upstream = await fetch(imageUrl, {
-        method: 'GET',
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-
-      const contentType = upstream.headers.get('content-type') || '';
-      if (upstream.ok && contentType.startsWith('image/')) {
-        // Consume body briefly so the upstream generation caches cleanly for the client browser.
-        await upstream.arrayBuffer();
-        sendJson(res, 200, {
-          imageUrl,
+    const submitRes = await fetchJsonWithTimeout<{ id?: string; message?: string }>(
+      `${AI_HORDE_BASE}/generate/async`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: hordeApiKey,
+          'Client-Agent': AI_HORDE_CLIENT_AGENT,
+        },
+        body: JSON.stringify({
           prompt,
-          seed,
-          model: 'flux-free',
-        });
+          params: {
+            width: 512,
+            height: 512,
+            steps: 20,
+            cfg_scale: 7,
+            sampler_name: 'k_euler_a',
+            seed: String(seed),
+            n: 1,
+          },
+          models: selectedModels,
+          nsfw: false,
+          censor_nsfw: true,
+          r2: true,
+        }),
+      },
+      10000
+    );
+
+    if (!submitRes.ok || !submitRes.data?.id) {
+      const msg = submitRes.data?.message || `Image queue returned status ${submitRes.status}.`;
+      sendJson(res, submitRes.status >= 400 && submitRes.status < 600 ? submitRes.status : 502, {
+        error: msg,
+      });
+      return;
+    }
+
+    const jobId = submitRes.data.id;
+    const deadline = Date.now() + 40000;
+    let isDone = false;
+
+    while (Date.now() < deadline && !clientClosed) {
+      await new Promise((resolve) => setTimeout(resolve, 1600));
+      if (clientClosed) return;
+
+      const checkRes = await fetchJsonWithTimeout<{
+        done?: boolean;
+        faulted?: boolean;
+        is_possible?: boolean;
+        wait_time?: number;
+      }>(
+        `${AI_HORDE_BASE}/generate/check/${encodeURIComponent(jobId)}`,
+        {
+          method: 'GET',
+          headers: { 'Client-Agent': AI_HORDE_CLIENT_AGENT },
+        },
+        6000
+      );
+
+      if (checkRes.data?.faulted) {
+        sendJson(res, 502, { error: 'Free image generation failed on the worker. Please try again.' });
         return;
       }
-
-      lastStatus = upstream.status || 502;
-      lastError = `Image service returned status ${lastStatus}.`;
-    } catch (err) {
-      clearTimeout(timer);
-      const isTimeout = (err as { name?: string })?.name === 'AbortError';
-      lastStatus = isTimeout ? 504 : 502;
-      lastError = isTimeout
-        ? 'Image generation timed out. Please try a shorter prompt.'
-        : 'Could not reach the free image generation service.';
+      if (checkRes.data?.is_possible === false) {
+        sendJson(res, 503, { error: 'No free image workers are currently online. Please try again shortly.' });
+        return;
+      }
+      if (checkRes.data?.done) {
+        isDone = true;
+        break;
+      }
     }
-  }
 
-  sendJson(res, lastStatus >= 400 && lastStatus < 600 ? lastStatus : 502, {
-    error: lastError,
-  });
+    if (clientClosed) return;
+
+    if (!isDone) {
+      sendJson(res, 504, { error: 'Free image queue is busy right now. Please try again in a moment.' });
+      return;
+    }
+
+    const statusRes = await fetchJsonWithTimeout<{
+      generations?: Array<{ img?: string; model?: string; censored?: boolean }>;
+    }>(
+      `${AI_HORDE_BASE}/generate/status/${encodeURIComponent(jobId)}`,
+      {
+        method: 'GET',
+        headers: { 'Client-Agent': AI_HORDE_CLIENT_AGENT },
+      },
+      8000
+    );
+
+    const gen = statusRes.data?.generations?.[0];
+    if (!statusRes.ok || !gen?.img) {
+      sendJson(res, 502, { error: 'Image generator completed without returning an image.' });
+      return;
+    }
+
+    let imageDataUrl = '';
+    if (gen.img.startsWith('http://') || gen.img.startsWith('https://')) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 12000);
+      try {
+        const imgRes = await fetch(gen.img, { signal: controller.signal });
+        if (!imgRes.ok) {
+          sendJson(res, 502, { error: `Failed to download generated image (status ${imgRes.status}).` });
+          return;
+        }
+        const mimeRaw = imgRes.headers.get('content-type') || 'image/webp';
+        const mimeType = mimeRaw.split(';')[0].trim() || 'image/webp';
+        const buf = Buffer.from(await imgRes.arrayBuffer());
+        imageDataUrl = `data:${mimeType};base64,${buf.toString('base64')}`;
+      } finally {
+        clearTimeout(timer);
+      }
+    } else {
+      imageDataUrl = gen.img.startsWith('data:')
+        ? gen.img
+        : `data:image/webp;base64,${gen.img}`;
+    }
+
+    sendJson(res, 200, {
+      imageUrl: imageDataUrl,
+      prompt,
+      seed,
+      model: 'flux-free',
+      generatedBy: gen.model || selectedModels[0] || 'AI Horde Free',
+    });
+  } catch (err) {
+    const isTimeout = (err as { name?: string })?.name === 'AbortError';
+    sendJson(res, isTimeout ? 504 : 502, {
+      error: isTimeout
+        ? 'Image generation timed out. Please try again.'
+        : 'Could not reach the free image generation service.',
+    });
+  }
 }
 

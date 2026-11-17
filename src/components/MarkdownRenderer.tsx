@@ -21,6 +21,13 @@ function GeneratedImage({ src, alt }: { src?: string; alt?: string }) {
     );
   }
 
+  const downloadExt = src.startsWith('data:image/webp')
+    ? 'webp'
+    : src.startsWith('data:image/png')
+    ? 'png'
+    : 'jpg';
+  const isDataUrl = src.startsWith('data:');
+
   return (
     <div className="my-3 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 dark:border-[#1e2333] dark:bg-[#0f111a]">
       <img
@@ -36,9 +43,8 @@ function GeneratedImage({ src, alt }: { src?: string; alt?: string }) {
         </span>
         <a
           href={src}
-          download="vesper-generated-image.jpg"
-          target="_blank"
-          rel="noopener noreferrer"
+          download={`vesper-generated-image.${downloadExt}`}
+          {...(isDataUrl ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
           className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 transition-colors hover:bg-slate-100 dark:border-[#1e2333] dark:bg-[#181b26] dark:text-[#cbd3e1] dark:hover:bg-[#222636]"
         >
           <Download className="h-3 w-3" />

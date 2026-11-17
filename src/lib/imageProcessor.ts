@@ -100,3 +100,53 @@ export async function processImageAttachment(
     sizeBytes,
   };
 }
+
+export async function compressImageDataUrlForFirestore(
+  dataUrl: string,
+  maxChars = 44000
+): Promise<string> {
+  if (!dataUrl.startsWith('data:image/') || dataUrl.length <= maxChars) {
+    return dataUrl;
+  }
+
+  const img = await loadImage(dataUrl);
+  const attempts: Array<{ maxDim: number; mime: 'image/webp' | 'image/jpeg'; quality: number }> = [
+    { maxDim: 512, mime: 'image/webp', quality: 0.78 },
+    { maxDim: 512, mime: 'image/webp', quality: 0.62 },
+    { maxDim: 448, mime: 'image/webp', quality: 0.56 },
+    { maxDim: 384, mime: 'image/webp', quality: 0.52 },
+    { maxDim: 384, mime: 'image/jpeg', quality: 0.62 },
+    { maxDim: 320, mime: 'image/jpeg', quality: 0.52 },
+    { maxDim: 256, mime: 'image/jpeg', quality: 0.48 },
+  ];
+
+  let smallest = dataUrl;
+  for (const step of attempts) {
+    const maxSide = Math.max(img.naturalWidth, img.naturalHeight) || step.maxDim;
+    const scale = Math.min(1, step.maxDim / maxSide);
+    const w = Math.max(1, Math.round(img.naturalWidth * scale));
+    const h = Math.max(1, Math.round(img.naturalHeight * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) continue;
+
+    if (step.mime === 'image/jpeg') {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, w, h);
+    }
+    ctx.drawImage(img, 0, 0, w, h);
+
+    const candidate = canvas.toDataURL(step.mime, step.quality);
+    if (candidate.length < smallest.length) {
+      smallest = candidate;
+    }
+    if (candidate.length <= maxChars) {
+      return candidate;
+    }
+  }
+
+  return smallest;
+}
